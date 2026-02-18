@@ -39,6 +39,8 @@ export type EventRecord = {
   guests?: number | null
   status?: string
   contactPhone?: number
+  groomWithEscort?: string
+  brideWithEscort?: string
   groomEscort?: string
   brideEscort?: string
   groomEntrySong?: string
@@ -54,10 +56,9 @@ export type EventRecord = {
   bridesBlessingNote?: string
   ushersOrPullCouple?: string
   witnesses?: string
+  alcoholSource?: string
   danceSeparationBarcodes?: string
   danceSeparationBarcodesNote?: string
-  danceSeparationWedding?: string
-  danceSeparationWeddingNote?: string
   slowDance?: string
   slowDanceNote?: string
   menus?: string
@@ -79,12 +80,26 @@ export type EventRecord = {
   bridePrepLocation?: string
   brideEscortPhone?: number
   arrivalTimeToHall?: string
+  eventHours?: string
+  eventManager?: string
+  chairsCommitment?: string
+  spareChairs?: string
+  authorizedSigner?: string
+  arrivalConfirmationsCompany?: string
+  seatingCompany?: string
+  seatingManagerPhone?: number
   brideLook1Makeup?: string
   brideLook1Hair?: string
   brideLook2Makeup?: string
   brideLook2Hair?: string
   brideLook3Makeup?: string
   brideLook3Hair?: string
+  seatingAllocationFileName?: string
+  seatingAllocationFileType?: string
+  seatingAllocationFileData?: string
+  alcoholMenuFileName?: string
+  alcoholMenuFileType?: string
+  alcoholMenuFileData?: string
 }
 
 export type MeetingRecord = {

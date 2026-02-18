@@ -117,28 +117,28 @@ textarea {
   border-radius: 22px;
   background: linear-gradient(180deg, #faf9f6 0%, #f6f4f1 100%);
   box-shadow: 0 6px 18px rgba(29, 37, 34, 0.05);
-  padding: clamp(10px, 1.4vw, 14px) clamp(14px, 2.1vw, 24px);
+  padding: clamp(3px, 0.5vw, 6px) clamp(6px, 1vw, 10px);
   display: grid;
-  gap: 12px;
+  gap: 2px;
   grid-template-columns: minmax(240px, 1fr) auto minmax(280px, 1fr);
   align-items: center;
   direction: ltr;
-  min-height: 106px;
+  min-height: 0;
 }
 
 .brand-block {
   direction: rtl;
   justify-self: end;
   display: grid;
-  gap: 3px;
+  gap: 1px;
   text-align: right;
-  max-width: 46ch;
+  max-width: 36ch;
 }
 
 .brand-kicker {
   margin: 0;
   display: block;
-  font-size: 0.67rem;
+  font-size: 0.58rem;
   letter-spacing: 0.08em;
   color: #90857a;
   text-transform: uppercase;
@@ -147,7 +147,7 @@ textarea {
 .brand-title {
   margin: 0;
   font-family: 'Cormorant Garamond', serif;
-  font-size: clamp(1.9rem, 2.35vw, 2.45rem);
+  font-size: clamp(1.35rem, 1.8vw, 1.8rem);
   line-height: 1;
   letter-spacing: 0.02em;
   color: #1f2b28;
@@ -155,10 +155,10 @@ textarea {
 
 .brand-sub {
   margin: 0;
-  max-width: 44ch;
+  max-width: 34ch;
   color: #8c8279;
-  font-size: 0.78rem;
-  line-height: 1.25;
+  font-size: 0.66rem;
+  line-height: 1.15;
 }
 
 .brand-new-btn {
@@ -173,14 +173,14 @@ textarea {
   justify-self: start;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
 .header-account .btn {
-  padding: 9px 16px;
-  font-size: 0.82rem;
-  min-height: 38px;
+  padding: 5px 10px;
+  font-size: 0.72rem;
+  min-height: 30px;
 }
 
 .user-chip {
@@ -188,10 +188,10 @@ textarea {
   border-radius: 999px;
   background: #fff;
   color: #7e746b;
-  font-size: 0.8rem;
-  padding: 8px 14px;
-  min-height: 38px;
-  max-width: 290px;
+  font-size: 0.7rem;
+  padding: 4px 9px;
+  min-height: 30px;
+  max-width: 220px;
   display: inline-flex;
   align-items: center;
   white-space: nowrap;
@@ -205,25 +205,35 @@ textarea {
   display: grid;
   justify-items: center;
   align-content: center;
-  gap: 5px;
+  gap: 2px;
   border: 1px solid rgba(30, 43, 40, 0.1);
-  border-radius: 16px;
+  border-radius: 12px;
   background: #fff;
-  padding: 8px 14px;
-  min-width: 124px;
+  padding: 4px 8px;
+  min-width: 92px;
 }
 
 .mode-title {
   margin: 0;
-  font-size: 0.72rem;
+  font-size: 0.62rem;
   color: #9a8f84;
 }
 
 .mode-state {
   margin: 0;
-  font-size: 0.78rem;
+  font-size: 0.68rem;
   font-weight: 600;
   color: #7d7267;
+}
+
+.header-mode .toggle-track {
+  width: 30px;
+  height: 18px;
+}
+
+.header-mode .toggle-thumb {
+  width: 14px;
+  height: 14px;
 }
 
 .toggle {
@@ -438,6 +448,12 @@ textarea {
   color: var(--ink);
 }
 
+:root[data-theme='dark'] .field-pop-highlight .input {
+  border-color: rgba(102, 215, 160, 0.58);
+  box-shadow: 0 0 0 3px rgba(102, 215, 160, 0.22);
+  background: rgba(102, 215, 160, 0.12);
+}
+
 :root[data-theme='dark'] .input::placeholder,
 :root[data-theme='dark'] textarea::placeholder {
   color: #8a9ab5;
@@ -494,6 +510,48 @@ textarea {
   background: rgba(134, 235, 211, 0.2);
   border-color: rgba(134, 235, 211, 0.36);
   color: #d2fff2;
+}
+
+:root[data-theme='dark'] .supplier-editor-card {
+  background: linear-gradient(160deg, #1a2433 0%, #212f43 100%);
+  border-color: var(--line);
+}
+
+:root[data-theme='dark'] .upload-box {
+  background: linear-gradient(160deg, #1a2433 0%, #212f43 100%);
+  border-color: var(--line);
+}
+
+:root[data-theme='dark'] .supplier-editor-head {
+  border-bottom: 1px dashed var(--line);
+  padding-bottom: 6px;
+}
+
+:root[data-theme='dark'] .supplier-editor-head h4 {
+  color: var(--ink);
+}
+
+:root[data-theme='dark'] .supplier-finance-grid {
+  background: rgba(20, 31, 45, 0.72);
+  border-color: rgba(170, 190, 220, 0.38);
+}
+
+:root[data-theme='dark'] .supplier-finance-item {
+  background: #192434;
+  border-color: var(--line);
+}
+
+:root[data-theme='dark'] .supplier-finance-item span {
+  color: var(--ink-soft);
+}
+
+:root[data-theme='dark'] .supplier-finance-item strong {
+  color: #bff6dd;
+}
+
+:root[data-theme='dark'] .supplier-signature-box {
+  background: #1a2433;
+  border-color: var(--line);
 }
 
 .page {
@@ -1268,6 +1326,14 @@ textarea {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.questionnaire-subtitle {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--brand-strong);
+}
+
 .wizard-flow {
   gap: 12px;
 }
@@ -1677,6 +1743,12 @@ textarea {
   font-size: 0.84rem;
 }
 
+.field-pop-highlight .input {
+  border-color: rgba(47, 125, 95, 0.52);
+  box-shadow: 0 0 0 3px rgba(47, 125, 95, 0.14);
+  background: rgba(235, 247, 242, 0.62);
+}
+
 .input {
   width: 100%;
   border: 1px solid rgba(30, 43, 40, 0.18);
@@ -1703,6 +1775,27 @@ textarea {
   gap: 8px;
   flex-wrap: wrap;
   align-items: center;
+}
+
+.upload-box-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.upload-box {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fcf8f2;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.upload-box-title {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--brand-strong);
 }
 
 .editor-grid {

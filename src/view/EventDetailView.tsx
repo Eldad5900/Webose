@@ -74,6 +74,11 @@ function supplierRemainingAmount(supplier: SupplierRecord) {
   return null
 }
 
+function supplierSignatureDefaultAmount(supplier: SupplierRecord) {
+  if (typeof supplier.balance === 'number') return Math.max(supplier.balance, 0)
+  return supplierRemainingAmount(supplier)
+}
+
 function normalizeChoice(value?: string | null) {
   return value?.trim() ?? ''
 }
@@ -198,6 +203,7 @@ export default function EventDetailView({
       { label: 'שיר כניסת כלה', value: event.brideEntrySong || '' },
       { label: 'שיר שבירת כוס', value: event.glassBreakSong || '' },
       { label: 'לאחר טבעות', value: event.afterRings || '' },
+      { label: 'נשארים לברך / לשלוף את הזוג', value: event.ushersOrPullCouple || '' },
       { label: 'עדים', value: event.witnesses || '' },
       { label: 'סלואו', value: checklistDisplay(event.slowDance, event.slowDanceNote) }
     ]
@@ -218,12 +224,12 @@ export default function EventDetailView({
   const liveOperations = useMemo(() => {
     const checklist: LabeledValue[] = [
       {
-        label: 'הפרדה ברקודים',
-        value: checklistDisplay(event.danceSeparationBarcodes, event.danceSeparationBarcodesNote)
+        label: 'אלכוהול',
+        value: event.alcoholSource || ''
       },
       {
-        label: 'הפרדה ברחבת חתונה',
-        value: checklistDisplay(event.danceSeparationWedding, event.danceSeparationWeddingNote)
+        label: 'הפרדה ברקודים',
+        value: event.danceSeparationBarcodes || ''
       },
       { label: 'תפריטים', value: checklistDisplay(event.menus, event.menusNote) },
       { label: 'כיפות', value: checklistDisplay(event.kippot, event.kippotNote) },
@@ -263,12 +269,16 @@ export default function EventDetailView({
 
   const openSupplierSignatureModal = (supplier: SupplierRecord) => {
     const nowHour = new Date().toTimeString().slice(0, 5)
-    const remainingAmount = supplierRemainingAmount(supplier)
+    const defaultAmount = supplierSignatureDefaultAmount(supplier)
+    const safeStartHour =
+      typeof supplier.hours === 'string' && /^\d{2}:\d{2}$/.test(supplier.hours)
+        ? supplier.hours
+        : nowHour
     setSignatureModal({
       supplierId: supplier.id,
       supplierName: supplier.name || '',
-      amount: remainingAmount !== null ? String(remainingAmount) : '',
-      startHour: supplier.hours || nowHour,
+      amount: defaultAmount !== null ? String(defaultAmount) : '',
+      startHour: safeStartHour,
       endHour: nowHour,
       signature: supplier.paymentReceivedSignature || ''
     })
@@ -471,7 +481,7 @@ export default function EventDetailView({
     eventInput.preventDefault()
     if (!signatureModal || !selectedSupplier) return
 
-    const remainingAmount = supplierRemainingAmount(selectedSupplier)
+    const defaultAmount = supplierSignatureDefaultAmount(selectedSupplier)
     const amountText = signatureModal.amount.replace(',', '.').trim()
     const normalizedAmount = amountText ? Number(amountText) : NaN
     const signerName = 'מנהל אירוע'
@@ -491,10 +501,10 @@ export default function EventDetailView({
     }
 
     if (workHoursText) payload.paymentReceivedHours = workHoursText
-    if (typeof remainingAmount === 'number') {
-      payload.paymentReceivedAmount = remainingAmount
-    } else if (Number.isFinite(normalizedAmount)) {
+    if (Number.isFinite(normalizedAmount)) {
       payload.paymentReceivedAmount = normalizedAmount
+    } else if (typeof defaultAmount === 'number') {
+      payload.paymentReceivedAmount = defaultAmount
     }
 
     setSignatureSaving(true)

@@ -31,6 +31,7 @@ export type QuestionnaireSection = {
 
 const yesNoMaybeOptions = ['כן', 'לא', 'כן אבל']
 const existsNotExistsOptions = ['קיים', 'לא קיים']
+const parentsEscortDefaultValue = 'על ידי ההורים'
 
 export const eventQuestionnaireSections: QuestionnaireSection[] = [
   {
@@ -39,7 +40,7 @@ export const eventQuestionnaireSections: QuestionnaireSection[] = [
     description: 'נתונים שחייבים לכל אירוע כדי להתחיל עבודה מסודרת.',
     defaultOpen: true,
     fields: [
-      { key: 'coupleName', label: 'שם הזוג', kind: 'text', required: true },
+      { key: 'coupleName', label: 'שם אירוע', kind: 'text', required: true },
       { key: 'date', label: 'תאריך האירוע', kind: 'date', required: true },
       { key: 'hall', label: 'אולם / גן אירועים', kind: 'text', required: true },
       { key: 'status', label: 'סטטוס הפקה', kind: 'text', placeholder: 'לדוגמה: סגירת ספקים' },
@@ -70,13 +71,21 @@ export const eventQuestionnaireSections: QuestionnaireSection[] = [
     title: 'לוגיסטיקה והכנות',
     description: 'הכנות מקדימות וליווי יום האירוע.',
     fields: [
+      { key: 'groomPrepLocation', label: 'מיקום התארגנות חתן', kind: 'text' },
+      { key: 'bridePrepLocation', label: 'מיקום התארגנות כלה', kind: 'text' },
       { key: 'groomEscort', label: 'מלווה חתן', kind: 'text' },
       { key: 'groomEscortPhone', label: 'טלפון מלווה חתן', kind: 'tel' },
       { key: 'brideEscort', label: 'מלווה כלה', kind: 'text' },
       { key: 'brideEscortPhone', label: 'טלפון מלווה כלה', kind: 'tel' },
-      { key: 'groomPrepLocation', label: 'מיקום התארגנות חתן', kind: 'text' },
-      { key: 'bridePrepLocation', label: 'מיקום התארגנות כלה', kind: 'text' },
-      { key: 'arrivalTimeToHall', label: 'שעת הגעה לאולם', kind: 'time' }
+      { key: 'arrivalTimeToHall', label: 'שעת הגעה לאולם', kind: 'time' },
+      { key: 'eventHours', label: 'שעות האירוע', kind: 'text' },
+      { key: 'eventManager', label: 'מנהל אירוע', kind: 'text' },
+      { key: 'chairsCommitment', label: 'התחייבות כיסאות', kind: 'text' },
+      { key: 'spareChairs', label: 'כיסאות רזרבה', kind: 'text' },
+      { key: 'authorizedSigner', label: 'מורשה חתימה', kind: 'text' },
+      { key: 'arrivalConfirmationsCompany', label: 'חברת אישורי הגעה', kind: 'text' },
+      { key: 'seatingCompany', label: 'חברת הושבה', kind: 'text' },
+      { key: 'seatingManagerPhone', label: 'טלפון מנהל הושבה', kind: 'tel' }
     ]
   },
   {
@@ -84,20 +93,22 @@ export const eventQuestionnaireSections: QuestionnaireSection[] = [
     title: 'חופה וטקס',
     description: 'סדר האירוע, שירים ונקודות טקס.',
     fields: [
+      { key: 'groomWithEscort', label: 'חתן בליווי', kind: 'text' },
+      { key: 'brideWithEscort', label: 'כלה בליווי', kind: 'text' },
       { key: 'groomEntrySong', label: 'שיר כניסת חתן', kind: 'text' },
       { key: 'brideEntrySong', label: 'שיר כניסת כלה', kind: 'text' },
       { key: 'siblingsEntry', label: 'כניסת אחים/אחיות', kind: 'select', options: yesNoMaybeOptions },
       {
         key: 'siblingsEntrySong',
-        label: 'הערת כניסת אחים/אחיות',
+        label: 'שיר כניסת אחים/אחיות',
         kind: 'text',
-        showWhen: { key: 'siblingsEntry', value: 'כן אבל' }
+        showWhen: { key: 'siblingsEntry', value: 'כן' }
       },
       { key: 'waitingAtChuppah', label: 'מי ממתין בחופה', kind: 'text' },
       { key: 'glassBreakSong', label: 'שיר שבירת כוס', kind: 'text' },
       { key: 'afterShoeshbinim', label: 'אחרי שושבינים', kind: 'text' },
       { key: 'afterRings', label: 'אחרי טבעות', kind: 'text' },
-      { key: 'wineAtChuppah', label: 'יין בחופה', kind: 'text' },
+      { key: 'wineAtChuppah', label: 'יין בחופה', kind: 'select', options: ['אדום', 'לבן'] },
       { key: 'bridesBlessing', label: 'ברכת כלה', kind: 'select', options: yesNoMaybeOptions },
       {
         key: 'bridesBlessingNote',
@@ -105,7 +116,12 @@ export const eventQuestionnaireSections: QuestionnaireSection[] = [
         kind: 'text',
         showWhen: { key: 'bridesBlessing', value: 'כן אבל' }
       },
-      { key: 'ushersOrPullCouple', label: 'סדרנים / הובלת זוג', kind: 'text' },
+      {
+        key: 'ushersOrPullCouple',
+        label: 'נשארים לברך / לשלוף את הזוג',
+        kind: 'select',
+        options: ['נשארים לברך', 'לשלוף את הזוג']
+      },
       { key: 'witnesses', label: 'עדים', kind: 'text' }
     ]
   },
@@ -115,28 +131,15 @@ export const eventQuestionnaireSections: QuestionnaireSection[] = [
     description: 'הנחיות לרחבה ולהפרדה במידת הצורך.',
     fields: [
       {
+        key: 'alcoholSource',
+        label: 'אלכוהול',
+        kind: 'select',
+        options: ['חברה חיצונית', 'אישית']
+      },
+      {
         key: 'danceSeparationBarcodes',
         label: 'הפרדה ברקודים',
-        kind: 'select',
-        options: yesNoMaybeOptions
-      },
-      {
-        key: 'danceSeparationBarcodesNote',
-        label: 'הערת הפרדה ברקודים',
-        kind: 'text',
-        showWhen: { key: 'danceSeparationBarcodes', value: 'כן אבל' }
-      },
-      {
-        key: 'danceSeparationWedding',
-        label: 'הפרדה ברחבת חתונה',
-        kind: 'select',
-        options: yesNoMaybeOptions
-      },
-      {
-        key: 'danceSeparationWeddingNote',
-        label: 'הערת הפרדה ברחבת חתונה',
-        kind: 'text',
-        showWhen: { key: 'danceSeparationWedding', value: 'כן אבל' }
+        kind: 'text'
       },
       { key: 'slowDance', label: 'ריקוד סלואו', kind: 'select', options: yesNoMaybeOptions },
       {
@@ -255,7 +258,18 @@ export function createQuestionnaireFormState(event?: EventRecord) {
       return
     }
     if (typeof rawValue === 'string') {
+      if (
+        (field.key === 'groomWithEscort' || field.key === 'brideWithEscort') &&
+        !rawValue.trim()
+      ) {
+        initialState[field.key] = parentsEscortDefaultValue
+        return
+      }
       initialState[field.key] = rawValue
+      return
+    }
+    if (field.key === 'groomWithEscort' || field.key === 'brideWithEscort') {
+      initialState[field.key] = parentsEscortDefaultValue
       return
     }
     initialState[field.key] = ''

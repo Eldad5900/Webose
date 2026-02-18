@@ -20,10 +20,18 @@ type SupplierFormState = {
   balance: string
 }
 
+type SeatingAllocationUploadState = {
+  fileName: string
+  fileType: string
+  fileData: string
+}
+
 const questionnaireFields = eventQuestionnaireSections.flatMap((section) => section.fields)
 const questionnaireSectionsById = new Map(
   eventQuestionnaireSections.map((section) => [section.id, section] as const)
 )
+
+const MAX_SEATING_FILE_SIZE_BYTES = 700 * 1024
 
 const editorSteps = [
   {
@@ -59,9 +67,15 @@ const editorSteps = [
   {
     id: 'step-6',
     title: 'ספקים ותשלומים',
-    description: 'הוספת ספקים, תשלומים ושמירה.',
+    description: 'הוספת ספקים וסגירת תשלומים.',
     sectionIds: [] as string[],
     includesSuppliers: true
+  },
+  {
+    id: 'step-7',
+    title: 'הקצאת הושבה',
+    description: 'העלאת קובץ או תמונה של הקצאת ההושבה.',
+    sectionIds: [] as string[]
   }
 ] as const
 
@@ -157,6 +171,22 @@ function defaultSupplier() {
   }
 }
 
+function mapSeatingAllocationFromEvent(event?: EventRecord): SeatingAllocationUploadState {
+  return {
+    fileName: event?.seatingAllocationFileName ?? '',
+    fileType: event?.seatingAllocationFileType ?? '',
+    fileData: event?.seatingAllocationFileData ?? ''
+  }
+}
+
+function mapAlcoholMenuFromEvent(event?: EventRecord): SeatingAllocationUploadState {
+  return {
+    fileName: event?.alcoholMenuFileName ?? '',
+    fileType: event?.alcoholMenuFileType ?? '',
+    fileData: event?.alcoholMenuFileData ?? ''
+  }
+}
+
 function isTrimField(kind: QuestionnaireField['kind']) {
   return kind === 'text' || kind === 'textarea' || kind === 'tel' || kind === 'select'
 }
@@ -165,6 +195,47 @@ function inputTypeForField(kind: QuestionnaireField['kind']) {
   if (kind === 'textarea') return undefined
   if (kind === 'text') return 'text'
   return kind
+}
+
+function getSectionGroupTitle(sectionId: string, fieldKey: EditableEventField) {
+  if (sectionId === 'family' && fieldKey === 'groomFatherName') return 'משפחת החתן'
+  if (sectionId === 'family' && fieldKey === 'brideFatherName') return 'משפחת הכלה'
+  if (sectionId === 'logistics' && fieldKey === 'eventHours') return 'הכנות כלליות'
+  return ''
+}
+
+function applyEscortDefaults(formState: Record<EditableEventField, string>) {
+  const nextForm = { ...formState }
+  if (!nextForm.groomWithEscort.trim()) nextForm.groomWithEscort = 'על ידי ההורים'
+  if (!nextForm.brideWithEscort.trim()) nextForm.brideWithEscort = 'על ידי ההורים'
+  return nextForm
+}
+
+function splitEventNameToCoupleNames(value: string) {
+  const normalized = value.trim()
+  if (!normalized) return null
+
+  const byAnd = normalized.match(/^(.+?)\s+ו\s*(.+)$/)
+  if (byAnd && byAnd[1]?.trim() && byAnd[2]?.trim()) {
+    return { groomName: byAnd[1].trim(), brideName: byAnd[2].trim() }
+  }
+
+  const separators = [' / ', '/', ' & ', '&', ' + ', '+', ' - ', '-']
+  for (const separator of separators) {
+    const parts = normalized.split(separator).map((part) => part.trim()).filter(Boolean)
+    if (parts.length === 2) {
+      return { groomName: parts[0], brideName: parts[1] }
+    }
+  }
+
+  return null
+}
+
+function shouldKeepAutoSyncName(currentValue: string, previousAutoValue?: string) {
+  const normalizedCurrent = currentValue.trim()
+  if (!normalizedCurrent) return true
+  if (!previousAutoValue) return false
+  return normalizedCurrent === previousAutoValue.trim()
 }
 
 export default function EventEditorView({
@@ -185,6 +256,12 @@ export default function EventEditorView({
   const [suppliers, setSuppliers] = useState<SupplierFormState[]>(
     event?.suppliers?.length ? event.suppliers.map((supplier) => mapSupplierToForm(supplier)) : [defaultSupplier()]
   )
+  const [seatingAllocationUpload, setSeatingAllocationUpload] = useState<SeatingAllocationUploadState>(() =>
+    mapSeatingAllocationFromEvent(event)
+  )
+  const [alcoholMenuUpload, setAlcoholMenuUpload] = useState<SeatingAllocationUploadState>(() =>
+    mapAlcoholMenuFromEvent(event)
+  )
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [currentStep, setCurrentStep] = useState(0)
@@ -197,12 +274,14 @@ export default function EventEditorView({
   useEffect(() => {
     setDraftReady(false)
     if (typeof window === 'undefined') {
-      setForm(createQuestionnaireFormState(event))
+      setForm(applyEscortDefaults(createQuestionnaireFormState(event)))
       setSuppliers(
         event?.suppliers?.length
           ? event.suppliers.map((supplier) => mapSupplierToForm(supplier))
           : [defaultSupplier()]
       )
+      setSeatingAllocationUpload(mapSeatingAllocationFromEvent(event))
+      setAlcoholMenuUpload(mapAlcoholMenuFromEvent(event))
       setCurrentStep(0)
       setError('')
       setDraftReady(true)
@@ -218,8 +297,8 @@ export default function EventEditorView({
           currentStep?: number
         }
         const baseForm = createQuestionnaireFormState(event)
-        if (draft.form) setForm({ ...baseForm, ...draft.form })
-        else setForm(baseForm)
+        if (draft.form) setForm(applyEscortDefaults({ ...baseForm, ...draft.form }))
+        else setForm(applyEscortDefaults(baseForm))
 
         if (Array.isArray(draft.suppliers) && draft.suppliers.length) {
           setSuppliers(draft.suppliers)
@@ -230,6 +309,9 @@ export default function EventEditorView({
               : [defaultSupplier()]
           )
         }
+
+        setSeatingAllocationUpload(mapSeatingAllocationFromEvent(event))
+        setAlcoholMenuUpload(mapAlcoholMenuFromEvent(event))
 
         const nextStep =
           typeof draft.currentStep === 'number'
@@ -244,12 +326,14 @@ export default function EventEditorView({
       }
     }
 
-    setForm(createQuestionnaireFormState(event))
+    setForm(applyEscortDefaults(createQuestionnaireFormState(event)))
     setSuppliers(
       event?.suppliers?.length
         ? event.suppliers.map((supplier) => mapSupplierToForm(supplier))
         : [defaultSupplier()]
     )
+    setSeatingAllocationUpload(mapSeatingAllocationFromEvent(event))
+    setAlcoholMenuUpload(mapAlcoholMenuFromEvent(event))
     setCurrentStep(0)
     setError('')
     setDraftReady(true)
@@ -263,7 +347,11 @@ export default function EventEditorView({
       currentStep,
       updatedAt: Date.now()
     }
-    window.localStorage.setItem(draftKey, JSON.stringify(payload))
+    try {
+      window.localStorage.setItem(draftKey, JSON.stringify(payload))
+    } catch {
+      // Ignore localStorage quota errors, especially when an unsaved file is in memory.
+    }
   }, [form, suppliers, currentStep, draftKey, draftReady])
 
   const summaryQuestionsCount = useMemo(() => questionnaireFields.length, [])
@@ -279,7 +367,35 @@ export default function EventEditorView({
   const isLastStep = currentStep === totalSteps - 1
 
   const updateField = (key: EditableEventField, value: string) => {
-    setForm((prev) => ({ ...prev, [key]: value }))
+    setForm((prev) => {
+      const next = { ...prev, [key]: value }
+      if (key !== 'coupleName') return next
+
+      const parsedCoupleNames = splitEventNameToCoupleNames(value)
+      if (!parsedCoupleNames) return next
+
+      const previousParsedNames = splitEventNameToCoupleNames(prev.coupleName)
+
+      if (
+        shouldKeepAutoSyncName(
+          prev.groomName,
+          previousParsedNames?.groomName
+        )
+      ) {
+        next.groomName = parsedCoupleNames.groomName
+      }
+
+      if (
+        shouldKeepAutoSyncName(
+          prev.brideName,
+          previousParsedNames?.brideName
+        )
+      ) {
+        next.brideName = parsedCoupleNames.brideName
+      }
+
+      return next
+    })
   }
 
   const updateSupplier = (supplierId: string, key: keyof SupplierFormState, value: string) => {
@@ -294,6 +410,84 @@ export default function EventEditorView({
 
   const removeSupplier = (supplierId: string) => {
     setSuppliers((prev) => prev.filter((supplier) => supplier.id !== supplierId))
+  }
+
+  const handleSeatingAllocationUpload = (eventInput: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = eventInput.target.files?.[0]
+    if (!selectedFile) return
+
+    if (selectedFile.size > MAX_SEATING_FILE_SIZE_BYTES) {
+      setError('הקובץ גדול מדי. אפשר להעלות עד 700KB.')
+      eventInput.target.value = ''
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') {
+        setError('קריאת הקובץ נכשלה. נסה קובץ אחר.')
+        return
+      }
+      setSeatingAllocationUpload({
+        fileName: selectedFile.name,
+        fileType: selectedFile.type || 'application/octet-stream',
+        fileData: reader.result
+      })
+      setError('')
+      eventInput.target.value = ''
+    }
+    reader.onerror = () => {
+      setError('קריאת הקובץ נכשלה. נסה שוב.')
+      eventInput.target.value = ''
+    }
+    reader.readAsDataURL(selectedFile)
+  }
+
+  const handleAlcoholMenuUpload = (eventInput: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = eventInput.target.files?.[0]
+    if (!selectedFile) return
+
+    if (selectedFile.size > MAX_SEATING_FILE_SIZE_BYTES) {
+      setError('הקובץ גדול מדי. אפשר להעלות עד 700KB.')
+      eventInput.target.value = ''
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') {
+        setError('קריאת הקובץ נכשלה. נסה קובץ אחר.')
+        return
+      }
+      setAlcoholMenuUpload({
+        fileName: selectedFile.name,
+        fileType: selectedFile.type || 'application/octet-stream',
+        fileData: reader.result
+      })
+      setError('')
+      eventInput.target.value = ''
+    }
+    reader.onerror = () => {
+      setError('קריאת הקובץ נכשלה. נסה שוב.')
+      eventInput.target.value = ''
+    }
+    reader.readAsDataURL(selectedFile)
+  }
+
+  const clearSeatingAllocationUpload = () => {
+    setSeatingAllocationUpload({
+      fileName: '',
+      fileType: '',
+      fileData: ''
+    })
+  }
+
+  const clearAlcoholMenuUpload = () => {
+    setAlcoholMenuUpload({
+      fileName: '',
+      fileType: '',
+      fileData: ''
+    })
   }
 
   const goPrevStep = () => {
@@ -379,6 +573,26 @@ export default function EventEditorView({
       const normalized = isTrimField(field.kind) ? currentValue.trim() : currentValue
       payloadDraft[field.key] = normalized as never
     })
+
+    if (seatingAllocationUpload.fileData) {
+      payloadDraft.seatingAllocationFileName = seatingAllocationUpload.fileName.trim()
+      payloadDraft.seatingAllocationFileType = seatingAllocationUpload.fileType.trim()
+      payloadDraft.seatingAllocationFileData = seatingAllocationUpload.fileData
+    } else {
+      payloadDraft.seatingAllocationFileName = undefined
+      payloadDraft.seatingAllocationFileType = undefined
+      payloadDraft.seatingAllocationFileData = undefined
+    }
+
+    if (alcoholMenuUpload.fileData) {
+      payloadDraft.alcoholMenuFileName = alcoholMenuUpload.fileName.trim()
+      payloadDraft.alcoholMenuFileType = alcoholMenuUpload.fileType.trim()
+      payloadDraft.alcoholMenuFileData = alcoholMenuUpload.fileData
+    } else {
+      payloadDraft.alcoholMenuFileName = undefined
+      payloadDraft.alcoholMenuFileType = undefined
+      payloadDraft.alcoholMenuFileData = undefined
+    }
 
     setSaving(true)
     try {
@@ -473,9 +687,14 @@ export default function EventEditorView({
                     !field.showWhen || (form[field.showWhen.key] ?? '') === field.showWhen.value
                 )
                 .map((field) => {
+                  const sectionGroupTitle = getSectionGroupTitle(section.id, field.key)
+                  const fieldValue = form[field.key] ?? ''
+                  const shouldHighlightConditional =
+                    Boolean(field.showWhen) && fieldValue.trim().length === 0
+                  const fieldClassName = shouldHighlightConditional ? 'field field-pop-highlight' : 'field'
                   const commonProps = {
                     className: 'input',
-                    value: form[field.key] ?? '',
+                    value: fieldValue,
                     onChange: (eventInput: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
                       updateField(field.key, eventInput.target.value),
                     placeholder: field.placeholder
@@ -483,11 +702,11 @@ export default function EventEditorView({
 
                   const fieldInput =
                     field.kind === 'select' ? (
-                      <label className="field">
+                      <label className={fieldClassName}>
                         {field.label}
                         <select
                           className="input"
-                          value={form[field.key] ?? ''}
+                          value={fieldValue}
                           onChange={(eventInput) => updateField(field.key, eventInput.target.value)}
                         >
                           <option value="">בחר</option>
@@ -499,14 +718,14 @@ export default function EventEditorView({
                         </select>
                       </label>
                     ) : field.kind === 'tel' ? (
-                      <label className="field">
+                      <label className={fieldClassName}>
                         {field.label}
                         <input
                           className="input"
                           type="tel"
                           inputMode="numeric"
                           pattern="[0-9]*"
-                          value={form[field.key] ?? ''}
+                          value={fieldValue}
                           placeholder={field.placeholder ?? '0501234567'}
                           onChange={(eventInput) =>
                             updateField(field.key, sanitizePhoneInput(eventInput.target.value))
@@ -514,12 +733,12 @@ export default function EventEditorView({
                         />
                       </label>
                     ) : field.kind === 'textarea' ? (
-                      <label className="field">
+                      <label className={fieldClassName}>
                         {field.label}
                         <textarea {...commonProps} rows={field.rows ?? 3} />
                       </label>
                     ) : (
-                      <label className="field">
+                      <label className={fieldClassName}>
                         {field.label}
                         <input
                           {...commonProps}
@@ -530,11 +749,19 @@ export default function EventEditorView({
                     )
 
                   if (field.key !== 'guests') {
-                    return <React.Fragment key={field.key}>{fieldInput}</React.Fragment>
+                    return (
+                      <React.Fragment key={field.key}>
+                        {sectionGroupTitle ? (
+                          <p className="questionnaire-subtitle">{sectionGroupTitle}</p>
+                        ) : null}
+                        {fieldInput}
+                      </React.Fragment>
+                    )
                   }
 
                   return (
                     <React.Fragment key={field.key}>
+                      {sectionGroupTitle ? <p className="questionnaire-subtitle">{sectionGroupTitle}</p> : null}
                       {fieldInput}
                       <label className="field">
                         מספר אורחים משוער (20% פחות)
@@ -553,6 +780,84 @@ export default function EventEditorView({
           </section>
         ))}
       </div>
+
+      {isLastStep ? (
+        <section className="detail-section">
+          <div className="section-head split">
+            <h3 className="section-title">קבצים לאירוע</h3>
+            <p className="helper">אפשר להעלות קבצים ולשמור יחד עם האירוע.</p>
+          </div>
+          <div className="upload-box-grid">
+            <article className="upload-box">
+              <h4 className="upload-box-title">הקצאת הושבה</h4>
+              <label className="field">
+                העלאת קובץ / תמונה
+                <input
+                  className="input"
+                  type="file"
+                  onChange={handleSeatingAllocationUpload}
+                />
+                <p className="helper">אפשר להעלות קובץ או תמונה עד 700KB.</p>
+              </label>
+
+              {seatingAllocationUpload.fileName ? (
+                <div className="empty-block">
+                  <h4>{seatingAllocationUpload.fileName}</h4>
+                  <p>הקובץ מצורף לאירוע ויישמר בלחיצה על שמירה.</p>
+                  <div className="form-actions">
+                    <a
+                      className="btn ghost"
+                      href={seatingAllocationUpload.fileData}
+                      download={seatingAllocationUpload.fileName}
+                    >
+                      צפייה / הורדה
+                    </a>
+                    <button type="button" className="btn danger" onClick={clearSeatingAllocationUpload}>
+                      הסר קובץ
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <p className="helper">עדיין לא הועלה קובץ הקצאת הושבה.</p>
+              )}
+            </article>
+
+            <article className="upload-box">
+              <h4 className="upload-box-title">תפריט אלכוהול</h4>
+              <label className="field">
+                העלאת קובץ / תמונה
+                <input
+                  className="input"
+                  type="file"
+                  onChange={handleAlcoholMenuUpload}
+                />
+                <p className="helper">אפשר להעלות קובץ או תמונה עד 700KB.</p>
+              </label>
+
+              {alcoholMenuUpload.fileName ? (
+                <div className="empty-block">
+                  <h4>{alcoholMenuUpload.fileName}</h4>
+                  <p>קובץ תפריט האלכוהול מצורף לאירוע ויישמר בלחיצה על שמירה.</p>
+                  <div className="form-actions">
+                    <a
+                      className="btn ghost"
+                      href={alcoholMenuUpload.fileData}
+                      download={alcoholMenuUpload.fileName}
+                    >
+                      צפייה / הורדה
+                    </a>
+                    <button type="button" className="btn danger" onClick={clearAlcoholMenuUpload}>
+                      הסר קובץ
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <p className="helper">עדיין לא הועלה קובץ תפריט אלכוהול.</p>
+              )}
+            </article>
+          </div>
+        </section>
+      ) : null}
 
       {'includesSuppliers' in activeStep && activeStep.includesSuppliers ? (
         <section className="detail-section">
@@ -604,10 +909,11 @@ export default function EventEditorView({
                     />
                   </label>
                   <label className="field">
-                    שעת הגעה
+                    שעות פעילות
                     <input
                       className="input"
-                      type="time"
+                      type="text"
+                      placeholder="לדוגמה: 18:30 / לפני החופה"
                       value={supplier.hours}
                       onChange={(eventInput) => updateSupplier(supplier.id, 'hours', eventInput.target.value)}
                     />
