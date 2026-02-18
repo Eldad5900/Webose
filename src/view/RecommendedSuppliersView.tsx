@@ -1,5 +1,7 @@
 import React, { useMemo, useState } from 'react'
 import type { RecommendedSupplierRecord } from '../controlers/types'
+import PageHero from '../components/ui/PageHero'
+import StatusMessages from '../components/ui/StatusMessages'
 
 type SupplierFormState = {
   name: string
@@ -71,29 +73,24 @@ export default function RecommendedSuppliersView({
 
   return (
     <div className="page">
-      <section className="hero-block">
-        <div>
-          <h2 className="page-title">ספקים מומלצים</h2>
-          <p className="helper hero-copy">
-            הרשימה מתחילה ריקה. ניתן להוסיף ספקים ידנית בלבד, וכל מה שמוצג כאן הוא רק מה שהוספת.
-          </p>
-        </div>
+      <PageHero
+        title="ספקים מומלצים"
+        description="הרשימה מתחילה ריקה. ניתן להוסיף ספקים ידנית בלבד, וכל מה שמוצג כאן הוא רק מה שהוספת."
+        actions={
+          <button
+            type="button"
+            className="btn primary"
+            onClick={() => {
+              setNotice('')
+              setShowForm((prev) => !prev)
+            }}
+          >
+            {showForm ? 'סגירת טופס' : 'הוספת ספק'}
+          </button>
+        }
+      />
 
-        <button
-          type="button"
-          className="btn primary"
-          onClick={() => {
-            setNotice('')
-            setShowForm((prev) => !prev)
-          }}
-        >
-          {showForm ? 'סגירת טופס' : 'הוספת ספק'}
-        </button>
-      </section>
-
-      {busy ? <div className="helper">טוען...</div> : null}
-      {error ? <div className="error">{error}</div> : null}
-      {notice ? <div className="helper notice">{notice}</div> : null}
+      <StatusMessages busy={busy} error={error} notice={notice} />
 
       {showForm ? (
         <section className="detail-section recommended-form-panel">

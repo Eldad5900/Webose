@@ -395,16 +395,9 @@ export default function EventEditorView({
     }
   }
 
-  const handleSubmit = async (eventInput: React.FormEvent) => {
+  const handleSubmit = (eventInput: React.FormEvent) => {
+    // Keep the wizard manual: save only from explicit save button clicks.
     eventInput.preventDefault()
-    setError('')
-
-    if (!isLastStep) {
-      goNextStep()
-      return
-    }
-
-    await saveEvent({ closeAfterSave: true })
   }
 
   return (
@@ -668,7 +661,12 @@ export default function EventEditorView({
               שלב הבא
             </button>
           ) : (
-            <button className="btn primary" type="submit" disabled={saving}>
+            <button
+              className="btn primary"
+              type="button"
+              onClick={() => saveEvent({ closeAfterSave: true })}
+              disabled={saving}
+            >
               {saving ? 'שומר...' : 'שמירת אירוע'}
             </button>
           )}

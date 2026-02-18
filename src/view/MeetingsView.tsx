@@ -1,8 +1,26 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
-import type { MeetingRecord } from '../controlers/types'
+import type { EventRecord, MeetingRecord } from '../controlers/types'
+import PageHero from '../components/ui/PageHero'
+import StatCard from '../components/ui/StatCard'
+import StatusMessages from '../components/ui/StatusMessages'
 
 const weekdayLabels = ['א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ש']
+
+type MeetingsLocationState = {
+  presetEventId?: string
+  presetCoupleName?: string
+  presetContactPhone?: string | number | null
+}
+
+type AgendaItem = {
+  id: string
+  type: 'meeting' | 'event'
+  title: string
+  subtitle: string
+  timeLabel: string
+  sortValue: number
+}
 
 function parseDateKey(dateKey: string) {
   const [yearText, monthText, dayText] = dateKey.split('-')
@@ -44,6 +62,20 @@ function formatMeetingDate(date: string, time: string) {
   return `${datePart}${time ? ` · ${time}` : ''}`
 }
 
+function getDateTimeValue(date: string, time?: string) {
+  const safeDate = date || '1970-01-01'
+  const safeTime = time || '00:00'
+  const parsed = new Date(`${safeDate}T${safeTime}`).getTime()
+  return Number.isNaN(parsed) ? 0 : parsed
+}
+
+function buildEventSubtitle(event: EventRecord) {
+  const hall = event.hall?.trim() || 'אולם לא הוגדר'
+  const status = event.status?.trim()
+  if (!status) return hall
+  return `${hall} · סטטוס: ${status}`
+}
+
 function formatMonthTitle(date: Date) {
   return new Intl.DateTimeFormat('he-IL', {
     month: 'long',
@@ -72,13 +104,57 @@ function getCalendarDays(viewDate: Date) {
   })
 }
 
+function normalizeText(value: string) {
+  return value.trim().toLowerCase()
+}
+
+function normalizePhoneDigits(value?: string | number | null) {
+  if (value === null || value === undefined) return ''
+  return String(value).replace(/\D/g, '')
+}
+
+function toWhatsAppPhone(phone?: string | number | null) {
+  const digits = normalizePhoneDigits(phone)
+  if (!digits) return null
+  if (digits.startsWith('972')) return digits
+  if (digits.startsWith('0')) return `972${digits.slice(1)}`
+  if (digits.length >= 8) return `972${digits}`
+  return null
+}
+
+function buildMeetingMessage({
+  coupleName,
+  date,
+  time,
+  location
+}: {
+  coupleName: string
+  date: string
+  time: string
+  location: string
+}) {
+  const safeCoupleName = coupleName.trim() || 'זוג יקר'
+  const dateLabel = formatPrettyDate(date)
+  const timeLabel = time || 'לא צוינה שעה'
+  const locationLabel = location.trim() || 'מיקום יימסר בהמשך'
+
+  return [
+    `היי ${safeCoupleName},`,
+    `נקבעה עבורכם פגישה בתאריך ${dateLabel} בשעה ${timeLabel}.`,
+    `מיקום: ${locationLabel}.`,
+    'מחכה לראותכם.'
+  ].join('\n')
+}
+
 export default function MeetingsView({
   meetings,
+  events,
   busy,
   error,
   onAdd
 }: {
   meetings: MeetingRecord[]
+  events: EventRecord[]
   busy: boolean
   error: string
   onAdd: (payload: Omit<MeetingRecord, 'id'>) => Promise<void>
@@ -96,16 +172,25 @@ export default function MeetingsView({
   })
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState('')
+  const [messageLink, setMessageLink] = useState('')
   const coupleInputRef = useRef<HTMLInputElement | null>(null)
   const initialPresetAppliedRef = useRef(false)
 
   const sortedMeetings = useMemo(() => {
     return [...meetings].sort((first, second) => {
-      const firstTime = new Date(`${first.date || '1970-01-01'}T${first.time || '00:00'}`).getTime()
-      const secondTime = new Date(`${second.date || '1970-01-01'}T${second.time || '00:00'}`).getTime()
+      const firstTime = getDateTimeValue(first.date, first.time)
+      const secondTime = getDateTimeValue(second.date, second.time)
       return firstTime - secondTime
     })
   }, [meetings])
+
+  const sortedEvents = useMemo(() => {
+    return [...events].sort((first, second) => {
+      const firstTime = getDateTimeValue(first.date, first.arrivalTimeToHall)
+      const secondTime = getDateTimeValue(second.date, second.arrivalTimeToHall)
+      return firstTime - secondTime
+    })
+  }, [events])
 
   const meetingsByDate = useMemo(() => {
     return sortedMeetings.reduce<Map<string, MeetingRecord[]>>((acc, meeting) => {
@@ -118,37 +203,134 @@ export default function MeetingsView({
     }, new Map())
   }, [sortedMeetings])
 
+  const eventsByDate = useMemo(() => {
+    return sortedEvents.reduce<Map<string, EventRecord[]>>((acc, event) => {
+      const key = event.date || ''
+      if (!key) return acc
+      const existing = acc.get(key) ?? []
+      existing.push(event)
+      acc.set(key, existing)
+      return acc
+    }, new Map())
+  }, [sortedEvents])
+
   const selectedMonthKey = monthKey(viewDate)
   const selectedDayMeetings = meetingsByDate.get(selectedDate) ?? []
+  const selectedDayEvents = eventsByDate.get(selectedDate) ?? []
   const monthMeetings = sortedMeetings.filter((meeting) => {
     const parsed = parseDateKey(meeting.date)
     return parsed ? monthKey(parsed) === selectedMonthKey : false
   })
+  const monthEvents = sortedEvents.filter((event) => {
+    const parsed = parseDateKey(event.date)
+    return parsed ? monthKey(parsed) === selectedMonthKey : false
+  })
   const calendarDays = getCalendarDays(viewDate)
-  const nextUpcomingMeeting =
-    sortedMeetings.find((meeting) => {
-      const value = new Date(`${meeting.date || '1970-01-01'}T${meeting.time || '00:00'}`).getTime()
-      return value >= Date.now()
-    }) ?? sortedMeetings[0]
+
+  const monthAgendaItems = useMemo(() => {
+    const meetingItems: AgendaItem[] = monthMeetings.map((meeting) => ({
+      id: `meeting-${meeting.id}`,
+      type: 'meeting',
+      title: meeting.coupleName || 'זוג ללא שם',
+      subtitle: meeting.location || 'מיקום לא הוגדר',
+      timeLabel: formatMeetingDate(meeting.date, meeting.time),
+      sortValue: getDateTimeValue(meeting.date, meeting.time)
+    }))
+    const eventItems: AgendaItem[] = monthEvents.map((event) => ({
+      id: `event-${event.id}`,
+      type: 'event',
+      title: event.coupleName || 'אירוע ללא שם',
+      subtitle: buildEventSubtitle(event),
+      timeLabel: formatMeetingDate(event.date, event.arrivalTimeToHall || ''),
+      sortValue: getDateTimeValue(event.date, event.arrivalTimeToHall)
+    }))
+    return [...meetingItems, ...eventItems].sort((first, second) => first.sortValue - second.sortValue)
+  }, [monthMeetings, monthEvents])
+
+  const selectedDayAgendaItems = useMemo(() => {
+    const meetingItems: AgendaItem[] = selectedDayMeetings.map((meeting) => ({
+      id: `meeting-day-${meeting.id}`,
+      type: 'meeting',
+      title: meeting.coupleName || 'זוג ללא שם',
+      subtitle: meeting.location || 'מיקום לא הוגדר',
+      timeLabel: meeting.time || 'שעה לא הוגדרה',
+      sortValue: getDateTimeValue(meeting.date, meeting.time)
+    }))
+    const eventItems: AgendaItem[] = selectedDayEvents.map((event) => ({
+      id: `event-day-${event.id}`,
+      type: 'event',
+      title: event.coupleName || 'אירוע ללא שם',
+      subtitle: buildEventSubtitle(event),
+      timeLabel: event.arrivalTimeToHall ? `הגעה ${event.arrivalTimeToHall}` : 'יום אירוע',
+      sortValue: getDateTimeValue(event.date, event.arrivalTimeToHall)
+    }))
+    return [...meetingItems, ...eventItems].sort((first, second) => first.sortValue - second.sortValue)
+  }, [selectedDayMeetings, selectedDayEvents])
+
+  const nextUpcomingAgendaItem = useMemo(() => {
+    const merged: AgendaItem[] = [
+      ...sortedMeetings.map((meeting) => ({
+        id: `meeting-next-${meeting.id}`,
+        type: 'meeting' as const,
+        title: meeting.coupleName || 'זוג ללא שם',
+        subtitle: meeting.location || 'מיקום לא הוגדר',
+        timeLabel: formatMeetingDate(meeting.date, meeting.time),
+        sortValue: getDateTimeValue(meeting.date, meeting.time)
+      })),
+      ...sortedEvents.map((event) => ({
+        id: `event-next-${event.id}`,
+        type: 'event' as const,
+        title: event.coupleName || 'אירוע ללא שם',
+        subtitle: buildEventSubtitle(event),
+        timeLabel: formatMeetingDate(event.date, event.arrivalTimeToHall || ''),
+        sortValue: getDateTimeValue(event.date, event.arrivalTimeToHall)
+      }))
+    ].sort((first, second) => first.sortValue - second.sortValue)
+    return merged.find((item) => item.sortValue >= Date.now()) ?? merged[0]
+  }, [sortedMeetings, sortedEvents])
 
   const moveMonth = (diff: number) => {
     setViewDate((prev) => new Date(prev.getFullYear(), prev.getMonth() + diff, 1))
   }
 
+  const routeState = (location.state as MeetingsLocationState | null) ?? null
+
+  const resolveContactPhone = (coupleName: string) => {
+    const normalizedCouple = normalizeText(coupleName)
+    if (!normalizedCouple) return null
+
+    const presetCoupleName = normalizeText(routeState?.presetCoupleName ?? '')
+    if (normalizedCouple === presetCoupleName) {
+      const presetEvent = routeState?.presetEventId
+        ? events.find((event) => event.id === routeState.presetEventId)
+        : undefined
+      return presetEvent?.contactPhone ?? routeState?.presetContactPhone ?? null
+    }
+
+    const matchedEvent = events.find(
+      (event) => normalizeText(event.coupleName || '') === normalizedCouple
+    )
+    return matchedEvent?.contactPhone ?? null
+  }
+
   useEffect(() => {
     if (initialPresetAppliedRef.current) return
     const presetCoupleName =
-      typeof (location.state as { presetCoupleName?: unknown } | null)?.presetCoupleName === 'string'
-        ? ((location.state as { presetCoupleName?: string }).presetCoupleName ?? '').trim()
-        : ''
+      typeof routeState?.presetCoupleName === 'string' ? routeState.presetCoupleName.trim() : ''
     initialPresetAppliedRef.current = true
     if (!presetCoupleName) return
+
+    const prefilledPhone = resolveContactPhone(presetCoupleName)
     setForm((prev) => ({ ...prev, coupleName: presetCoupleName }))
-    setNotice('נפתחה פגישה חדשה עם שם הזוג מתוך כרטיס האירוע.')
+    setNotice(
+      prefilledPhone
+        ? 'נפתחה פגישה חדשה עם שם הזוג והטלפון המרכזי מתוך כרטיס האירוע.'
+        : 'נפתחה פגישה חדשה עם שם הזוג מתוך כרטיס האירוע.'
+    )
     if (coupleInputRef.current) {
       coupleInputRef.current.focus()
     }
-  }, [location.state])
+  }, [routeState, events])
 
   const handleDateSelect = (dateKey: string) => {
     const parsed = parseDateKey(dateKey)
@@ -164,9 +346,39 @@ export default function MeetingsView({
   const handleSubmit = async (eventInput: React.FormEvent) => {
     eventInput.preventDefault()
     setNotice('')
+    setMessageLink('')
     setSaving(true)
     try {
-      await onAdd(form)
+      const meetingDraft = {
+        ...form,
+        coupleName: form.coupleName.trim(),
+        location: form.location.trim()
+      }
+
+      await onAdd(meetingDraft)
+
+      const whatsappPhone = toWhatsAppPhone(resolveContactPhone(meetingDraft.coupleName))
+      let nextNotice = `הפגישה נשמרה ל־${formatPrettyDate(selectedDate)}`
+      let nextMessageLink = ''
+
+      if (whatsappPhone) {
+        const messageText = buildMeetingMessage({
+          coupleName: meetingDraft.coupleName,
+          date: meetingDraft.date,
+          time: meetingDraft.time,
+          location: meetingDraft.location
+        })
+        nextMessageLink = `https://wa.me/${whatsappPhone}?text=${encodeURIComponent(messageText)}`
+        const popup = window.open(nextMessageLink, '_blank', 'noopener,noreferrer')
+        if (popup) {
+          nextNotice = 'הפגישה נשמרה ונפתחה הודעה לזוג בוואטסאפ.'
+        } else {
+          nextNotice = 'הפגישה נשמרה. הדפדפן חסם פתיחה אוטומטית, לחץ על שליחת הודעה לזוג.'
+        }
+      } else {
+        nextNotice = 'הפגישה נשמרה, אבל לא נמצא טלפון קשר מרכזי לזוג לשליחת הודעה.'
+      }
+
       setForm((prev) => ({
         ...prev,
         coupleName: '',
@@ -174,7 +386,8 @@ export default function MeetingsView({
         time: '',
         date: selectedDate
       }))
-      setNotice(`הפגישה נשמרה ל־${formatPrettyDate(selectedDate)}`)
+      setMessageLink(nextMessageLink)
+      setNotice(nextNotice)
     } finally {
       setSaving(false)
     }
@@ -182,41 +395,45 @@ export default function MeetingsView({
 
   return (
     <div className="page meetings-page">
-      <section className="hero-block">
-        <div>
-          <h2 className="page-title">יומן פגישות</h2>
-          <p className="helper hero-copy">
-            אפשר לבחור תאריך בלחיצה על לוח השנה, לקבוע פגישה, ולראות בנפרד את כל פגישות החודש ואת
-            פגישות היום הנבחר.
-          </p>
-        </div>
-      </section>
+      <PageHero
+        title="יומן פגישות"
+        description="אפשר לבחור תאריך בלחיצה על לוח השנה, לקבוע פגישה חדשה, ולראות ביומן גם פגישות רגילות וגם אירועי זוג לפי תאריך."
+      />
 
       <section className="stats-grid">
-        <article className="stat-card">
-          <p className="stat-label">פגישות בחודש הנוכחי</p>
-          <p className="stat-value">{monthMeetings.length}</p>
-          <p className="stat-foot">{formatMonthTitle(viewDate)}</p>
-        </article>
-        <article className="stat-card">
-          <p className="stat-label">פגישות ביום הנבחר</p>
-          <p className="stat-value">{selectedDayMeetings.length}</p>
-          <p className="stat-foot">{formatPrettyDate(selectedDate)}</p>
-        </article>
-        <article className="stat-card">
-          <p className="stat-label">הפגישה הקרובה</p>
-          <p className="stat-value">{nextUpcomingMeeting?.coupleName || 'לא הוגדר'}</p>
-          <p className="stat-foot">
-            {nextUpcomingMeeting
-              ? formatMeetingDate(nextUpcomingMeeting.date, nextUpcomingMeeting.time)
-              : 'אין פגישות'}
-          </p>
-        </article>
+        <StatCard
+          label="פריטים בחודש הנוכחי"
+          value={monthAgendaItems.length}
+          foot={`${formatMonthTitle(viewDate)} · ${monthMeetings.length} פגישות · ${monthEvents.length} אירועים`}
+        />
+        <StatCard
+          label="פריטים ביום הנבחר"
+          value={selectedDayAgendaItems.length}
+          foot={`${formatPrettyDate(selectedDate)} · ${selectedDayMeetings.length} פגישות · ${selectedDayEvents.length} אירועים`}
+        />
+        <StatCard
+          label="הפריט הקרוב ביומן"
+          value={nextUpcomingAgendaItem?.title || 'לא הוגדר'}
+          foot={
+            nextUpcomingAgendaItem
+              ? `${nextUpcomingAgendaItem.type === 'meeting' ? 'פגישה רגילה' : 'אירוע זוג'} · ${nextUpcomingAgendaItem.timeLabel}`
+              : 'אין פריטים'
+          }
+        />
       </section>
 
-      {busy ? <div className="helper">טוען...</div> : null}
-      {error ? <div className="error">{error}</div> : null}
-      {notice ? <div className="helper notice">{notice}</div> : null}
+      <StatusMessages busy={busy} error={error} notice={notice} />
+      {messageLink ? (
+        <div className="form-actions">
+          <button
+            type="button"
+            className="btn ghost"
+            onClick={() => window.open(messageLink, '_blank', 'noopener,noreferrer')}
+          >
+            שליחת הודעה לזוג
+          </button>
+        </div>
+      ) : null}
 
       <div className="calendar-layout">
         <section className="detail-section calendar-panel">
@@ -249,7 +466,8 @@ export default function MeetingsView({
               </div>
             ))}
             {calendarDays.map((day) => {
-              const count = meetingsByDate.get(day.key)?.length ?? 0
+              const meetingsCount = meetingsByDate.get(day.key)?.length ?? 0
+              const eventsCount = eventsByDate.get(day.key)?.length ?? 0
               const isSelected = day.key === selectedDate
               const isToday = day.key === todayKey
               return (
@@ -260,10 +478,25 @@ export default function MeetingsView({
                   onClick={() => handleDateSelect(day.key)}
                 >
                   <span>{day.date.getDate()}</span>
-                  {count > 0 ? <small>{count}</small> : null}
+                  {meetingsCount > 0 || eventsCount > 0 ? (
+                    <div className="calendar-day-badges">
+                      {meetingsCount > 0 ? <small className="calendar-count meeting">פ {meetingsCount}</small> : null}
+                      {eventsCount > 0 ? <small className="calendar-count event">א {eventsCount}</small> : null}
+                    </div>
+                  ) : null}
                 </button>
               )
             })}
+          </div>
+          <div className="calendar-legend">
+            <span className="calendar-legend-item">
+              <small className="calendar-count meeting">פ</small>
+              פגישות
+            </span>
+            <span className="calendar-legend-item">
+              <small className="calendar-count event">א</small>
+              אירועי זוג
+            </span>
           </div>
         </section>
 
@@ -333,44 +566,54 @@ export default function MeetingsView({
 
       <div className="calendar-lists">
         <section className="detail-section">
-          <h3 className="section-title">כל הפגישות בחודש</h3>
+          <h3 className="section-title">כל הפגישות והאירועים בחודש</h3>
           <div className="meeting-list">
-            {monthMeetings.length ? (
-              monthMeetings.map((meeting) => (
-                <article key={meeting.id} className="meeting-row">
+            {monthAgendaItems.length ? (
+              monthAgendaItems.map((item) => (
+                <article key={item.id} className={`meeting-row ${item.type}`}>
                   <div>
-                    <h4>{meeting.coupleName || 'זוג ללא שם'}</h4>
-                    <p>{meeting.location || 'מיקום לא הוגדר'}</p>
+                    <div className="meeting-row-head">
+                      <span className={`status-chip ${item.type === 'meeting' ? 'status-ready' : 'status-plan'}`}>
+                        {item.type === 'meeting' ? 'פגישה רגילה' : 'אירוע זוג'}
+                      </span>
+                    </div>
+                    <h4>{item.title}</h4>
+                    <p>{item.subtitle}</p>
                   </div>
-                  <div className="meeting-time">{formatMeetingDate(meeting.date, meeting.time)}</div>
+                  <div className="meeting-time">{item.timeLabel}</div>
                 </article>
               ))
             ) : (
               <div className="empty-block">
-                <h4>אין פגישות בחודש הזה</h4>
-                <p>בחר תאריך בלוח השנה וקבע פגישה חדשה.</p>
+                <h4>אין פגישות או אירועים בחודש הזה</h4>
+                <p>בחר תאריך בלוח השנה או הוסף אירוע חדש.</p>
               </div>
             )}
           </div>
         </section>
 
         <section className="detail-section">
-          <h3 className="section-title">פגישות של היום הנבחר</h3>
+          <h3 className="section-title">פגישות ואירועים של היום הנבחר</h3>
           <div className="meeting-list">
-            {selectedDayMeetings.length ? (
-              selectedDayMeetings.map((meeting) => (
-                <article key={meeting.id} className="meeting-row">
+            {selectedDayAgendaItems.length ? (
+              selectedDayAgendaItems.map((item) => (
+                <article key={item.id} className={`meeting-row ${item.type}`}>
                   <div>
-                    <h4>{meeting.coupleName || 'זוג ללא שם'}</h4>
-                    <p>{meeting.location || 'מיקום לא הוגדר'}</p>
+                    <div className="meeting-row-head">
+                      <span className={`status-chip ${item.type === 'meeting' ? 'status-ready' : 'status-plan'}`}>
+                        {item.type === 'meeting' ? 'פגישה רגילה' : 'אירוע זוג'}
+                      </span>
+                    </div>
+                    <h4>{item.title}</h4>
+                    <p>{item.subtitle}</p>
                   </div>
-                  <div className="meeting-time">{meeting.time || 'שעה לא הוגדרה'}</div>
+                  <div className="meeting-time">{item.timeLabel}</div>
                 </article>
               ))
             ) : (
               <div className="empty-block">
-                <h4>אין פגישות ביום הזה</h4>
-                <p>אפשר לבחור תאריך אחר או לקבוע פגישה חדשה.</p>
+                <h4>אין פגישות או אירועים ביום הזה</h4>
+                <p>אפשר לבחור תאריך אחר, לקבוע פגישה, או לצפות באירוע שנקבע.</p>
               </div>
             )}
           </div>

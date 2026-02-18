@@ -1,5 +1,31 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { EventRecord, SupplierRecord } from '../controlers/types'
+import type { SupplierSignaturePayload } from '../types/supplierSigning'
+
+type SupplierSignatureModalState = {
+  supplierId: string
+  supplierName: string
+  amount: string
+  startHour: string
+  endHour: string
+  signature: string
+}
+
+type LabeledValue = {
+  label: string
+  value: string
+}
+
+type WakeLockSentinelLike = {
+  release: () => Promise<void>
+  addEventListener?: (type: 'release', listener: () => void) => void
+}
+
+type NavigatorWithWakeLock = Navigator & {
+  wakeLock?: {
+    request: (type: 'screen') => Promise<WakeLockSentinelLike>
+  }
+}
 
 function hasValue(value?: string | null) {
   return Boolean(value && value.trim() !== '')
@@ -48,13 +74,26 @@ function supplierRemainingAmount(supplier: SupplierRecord) {
   return null
 }
 
-type SupplierSignatureModalState = {
-  supplierId: string
-  supplierName: string
-  amount: string
-  startHour: string
-  endHour: string
-  signature: string
+function normalizeChoice(value?: string | null) {
+  return value?.trim() ?? ''
+}
+
+function checklistDisplay(value?: string | null, note?: string | null) {
+  const normalized = normalizeChoice(value)
+  if (!normalized || normalized === 'לא' || normalized === 'לא קיים') return ''
+  if (normalized === 'כן אבל') {
+    return hasValue(note) ? `כן אבל · ${note?.trim()}` : 'כן אבל'
+  }
+  return normalized
+}
+
+function toTimeSortValue(value?: string) {
+  if (!value || !/^\d{2}:\d{2}$/.test(value)) return Number.MAX_SAFE_INTEGER
+  const [hourText, minuteText] = value.split(':')
+  const hour = Number(hourText)
+  const minute = Number(minuteText)
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return Number.MAX_SAFE_INTEGER
+  return hour * 60 + minute
 }
 
 export default function EventDetailView({
@@ -73,21 +112,27 @@ export default function EventDetailView({
   onSignSupplier: (
     eventId: string,
     supplierId: string,
-    payload: {
-      paymentReceivedAmount?: number
-      paymentReceivedHours?: string
-      paymentReceivedDate?: string
-      paymentReceivedName?: string
-      paymentReceivedSignature?: string
-      hasSigned?: boolean
-    }
+    payload: SupplierSignaturePayload
   ) => Promise<void>
 }) {
   const [signatureModal, setSignatureModal] = useState<SupplierSignatureModalState | null>(null)
   const [signatureSaving, setSignatureSaving] = useState(false)
+  const [liveScreenLocked, setLiveScreenLocked] = useState(false)
+  const [wakeLockActive, setWakeLockActive] = useState(false)
+  const [wakeLockError, setWakeLockError] = useState('')
   const signatureCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const signatureDrawingRef = useRef(false)
+  const wakeLockRef = useRef<WakeLockSentinelLike | null>(null)
+
   const suppliers = event.suppliers ?? []
+  const sortedSuppliers = useMemo(
+    () =>
+      [...suppliers].sort(
+        (first, second) => toTimeSortValue(first.hours) - toTimeSortValue(second.hours)
+      ),
+    [suppliers]
+  )
+
   const totalSuppliersAmount = suppliers.reduce((sum, supplier) => {
     return sum + (typeof supplier.totalPayment === 'number' ? supplier.totalPayment : 0)
   }, 0)
@@ -97,12 +142,119 @@ export default function EventDetailView({
 
   const timelineFields = [
     { label: 'הגעה לאולם', value: event.arrivalTimeToHall },
+    { label: 'מי ממתין בחופה', value: event.waitingAtChuppah },
     { label: 'שיר כניסת חתן', value: event.groomEntrySong },
     { label: 'שיר כניסת כלה', value: event.brideEntrySong },
     { label: 'שבירת כוס', value: event.glassBreakSong },
     { label: 'אחרי טבעות', value: event.afterRings },
     { label: 'ריקוד סלואו', value: event.slowDance }
   ].filter((item) => hasValue(item.value))
+
+  const liveOpeningFields = [
+    { label: 'תאריך האירוע', value: formatDate(event.date) },
+    { label: 'מיקום האירוע', value: event.hall || 'לא הוגדר' },
+    { label: 'שעת הגעה לאולם', value: event.arrivalTimeToHall || 'לא הוגדר' },
+    { label: 'סטטוס', value: event.status || 'בתהליך' },
+    {
+      label: 'כמות אורחים',
+      value: typeof event.guests === 'number' && event.guests > 0 ? String(event.guests) : 'לא הוגדר'
+    }
+  ]
+
+  const liveContacts = useMemo(() => {
+    const contacts: LabeledValue[] = []
+
+    if (event.contactPhone && event.contactPhone > 0) {
+      contacts.push({ label: 'טלפון קשר ראשי', value: formatPhone(event.contactPhone) })
+    }
+
+    const pushContact = (label: string, name?: string, phone?: number) => {
+      const parts: string[] = []
+      if (hasValue(name)) parts.push(name!.trim())
+      if (phone && phone > 0) parts.push(formatPhone(phone))
+      if (!parts.length) return
+      contacts.push({ label, value: parts.join(' · ') })
+    }
+
+    pushContact('חתן', event.groomName)
+    pushContact('כלה', event.brideName)
+    pushContact('מלווה חתן', event.groomEscort, event.groomEscortPhone)
+    pushContact('מלווה כלה', event.brideEscort, event.brideEscortPhone)
+    pushContact('אב החתן', event.groomFatherName, event.groomFatherPhone)
+    pushContact('אם החתן', event.groomMotherName, event.groomMotherPhone)
+    pushContact('אב הכלה', event.brideFatherName, event.brideFatherPhone)
+    pushContact('אם הכלה', event.brideMotherName, event.brideMotherPhone)
+
+    return contacts
+  }, [event])
+
+  const liveCeremonyFlow = useMemo(() => {
+    const items: LabeledValue[] = [
+      { label: 'חתן - מיקום התארגנות', value: event.groomPrepLocation || '' },
+      { label: 'כלה - מיקום התארגנות', value: event.bridePrepLocation || '' },
+      { label: 'הגעה לאולם', value: event.arrivalTimeToHall || '' },
+      { label: 'מי ממתין בחופה', value: event.waitingAtChuppah || '' },
+      { label: 'שיר כניסת חתן', value: event.groomEntrySong || '' },
+      { label: 'שיר כניסת כלה', value: event.brideEntrySong || '' },
+      { label: 'שיר שבירת כוס', value: event.glassBreakSong || '' },
+      { label: 'לאחר טבעות', value: event.afterRings || '' },
+      { label: 'עדים', value: event.witnesses || '' },
+      { label: 'סלואו', value: checklistDisplay(event.slowDance, event.slowDanceNote) }
+    ]
+
+    const siblingsValue = checklistDisplay(event.siblingsEntry, event.siblingsEntrySong)
+    if (siblingsValue) {
+      items.push({ label: 'כניסת אחים/אחיות', value: siblingsValue })
+    }
+
+    const blessingValue = checklistDisplay(event.bridesBlessing, event.bridesBlessingNote)
+    if (blessingValue) {
+      items.push({ label: 'ברכת כלה', value: blessingValue })
+    }
+
+    return items.filter((item) => hasValue(item.value))
+  }, [event])
+
+  const liveOperations = useMemo(() => {
+    const checklist: LabeledValue[] = [
+      {
+        label: 'הפרדה ברקודים',
+        value: checklistDisplay(event.danceSeparationBarcodes, event.danceSeparationBarcodesNote)
+      },
+      {
+        label: 'הפרדה ברחבת חתונה',
+        value: checklistDisplay(event.danceSeparationWedding, event.danceSeparationWeddingNote)
+      },
+      { label: 'תפריטים', value: checklistDisplay(event.menus, event.menusNote) },
+      { label: 'כיפות', value: checklistDisplay(event.kippot, event.kippotNote) },
+      { label: 'מניפות', value: checklistDisplay(event.fans, event.fansNote) },
+      {
+        label: 'סלי התארגנות',
+        value: checklistDisplay(event.organizationBaskets, event.organizationBasketsNote)
+      },
+      { label: 'מיץ ענבים', value: checklistDisplay(event.grapeJuice, event.grapeJuiceNote) },
+      { label: 'משקפי שמש', value: checklistDisplay(event.sunglasses, event.sunglassesNote) },
+      {
+        label: 'גומיות וכלי חירום',
+        value: checklistDisplay(event.gummiesAndTools, event.gummiesAndToolsNote)
+      }
+    ]
+
+    return checklist.filter((item) => hasValue(item.value))
+  }, [event])
+
+  const liveBrideLooks = useMemo(() => {
+    const looks: LabeledValue[] = [
+      { label: 'לוק 1 - איפור', value: checklistDisplay(event.brideLook1Makeup) },
+      { label: 'לוק 1 - שיער', value: checklistDisplay(event.brideLook1Hair) },
+      { label: 'לוק 2 - איפור', value: checklistDisplay(event.brideLook2Makeup) },
+      { label: 'לוק 2 - שיער', value: checklistDisplay(event.brideLook2Hair) },
+      { label: 'לוק 3 - איפור', value: checklistDisplay(event.brideLook3Makeup) },
+      { label: 'לוק 3 - שיער', value: checklistDisplay(event.brideLook3Hair) }
+    ]
+
+    return looks.filter((item) => hasValue(item.value))
+  }, [event])
 
   const selectedSupplier = useMemo(() => {
     if (!signatureModal) return null
@@ -209,6 +361,112 @@ export default function EventDetailView({
     image.src = signatureModal.signature
   }, [signatureModal])
 
+  const releaseWakeLock = useCallback(async () => {
+    if (!wakeLockRef.current) return
+    try {
+      await wakeLockRef.current.release()
+    } catch {
+      // ignore release errors to avoid blocking UI
+    } finally {
+      wakeLockRef.current = null
+      setWakeLockActive(false)
+    }
+  }, [])
+
+  const requestWakeLock = useCallback(async () => {
+    if (typeof navigator === 'undefined') return
+    const navigatorWithWakeLock = navigator as NavigatorWithWakeLock
+    if (!navigatorWithWakeLock.wakeLock) {
+      setWakeLockError('הדפדפן לא תומך במניעת כיבוי מסך.')
+      return
+    }
+
+    try {
+      const sentinel = await navigatorWithWakeLock.wakeLock.request('screen')
+      wakeLockRef.current = sentinel
+      setWakeLockActive(true)
+      setWakeLockError('')
+      sentinel.addEventListener?.('release', () => {
+        if (wakeLockRef.current === sentinel) {
+          wakeLockRef.current = null
+          setWakeLockActive(false)
+        }
+      })
+    } catch {
+      setWakeLockActive(false)
+      setWakeLockError('לא ניתן להשאיר את המסך דולק כרגע.')
+    }
+  }, [])
+
+  const handleLiveLockToggle = async () => {
+    if (liveScreenLocked) {
+      setLiveScreenLocked(false)
+      return
+    }
+    setLiveScreenLocked(true)
+    await requestWakeLock()
+  }
+
+  useEffect(() => {
+    if (eventMode) return
+    setLiveScreenLocked(false)
+  }, [eventMode])
+
+  useEffect(() => {
+    if (!eventMode || !liveScreenLocked) {
+      setWakeLockError('')
+      void releaseWakeLock()
+      return
+    }
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && !wakeLockRef.current) {
+        void requestWakeLock()
+      }
+    }
+
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [eventMode, liveScreenLocked, requestWakeLock, releaseWakeLock])
+
+  useEffect(() => {
+    if (!eventMode || !liveScreenLocked) return
+    const body = document.body
+    const html = document.documentElement
+    const scrollY = window.scrollY
+
+    const previousStyles = {
+      htmlOverflow: html.style.overflow,
+      bodyOverflow: body.style.overflow,
+      bodyPosition: body.style.position,
+      bodyTop: body.style.top,
+      bodyWidth: body.style.width
+    }
+
+    html.style.overflow = 'hidden'
+    body.style.overflow = 'hidden'
+    body.style.position = 'fixed'
+    body.style.top = `-${scrollY}px`
+    body.style.width = '100%'
+
+    return () => {
+      html.style.overflow = previousStyles.htmlOverflow
+      body.style.overflow = previousStyles.bodyOverflow
+      body.style.position = previousStyles.bodyPosition
+      body.style.top = previousStyles.bodyTop
+      body.style.width = previousStyles.bodyWidth
+      window.scrollTo(0, scrollY)
+    }
+  }, [eventMode, liveScreenLocked])
+
+  useEffect(() => {
+    return () => {
+      void releaseWakeLock()
+    }
+  }, [releaseWakeLock])
+
   const handleSupplierSignatureSubmit = async (eventInput: React.FormEvent) => {
     eventInput.preventDefault()
     if (!signatureModal || !selectedSupplier) return
@@ -225,14 +483,7 @@ export default function EventDetailView({
         ? `${signatureModal.startHour} - ${signatureModal.endHour}`
         : signatureModal.startHour || signatureModal.endHour || ''
 
-    const payload: {
-      paymentReceivedAmount?: number
-      paymentReceivedHours?: string
-      paymentReceivedDate?: string
-      paymentReceivedName?: string
-      paymentReceivedSignature?: string
-      hasSigned?: boolean
-    } = {
+    const payload: SupplierSignaturePayload = {
       hasSigned: true,
       paymentReceivedDate: now.toISOString().split('T')[0],
       paymentReceivedName: signerName,
@@ -258,13 +509,113 @@ export default function EventDetailView({
     }
   }
 
+  const renderSuppliersSection = ({
+    title,
+    subtitle,
+    stepNumber
+  }: {
+    title: string
+    subtitle: string
+    stepNumber?: string
+  }) => {
+    const suppliersToShow = eventMode ? sortedSuppliers : suppliers
+
+    return (
+      <section className={`detail-section${eventMode ? ' event-mode-section' : ''}`}>
+        <div className="section-head split">
+          <h3 className="section-title">
+            {stepNumber ? `${stepNumber}. ${title}` : title}
+          </h3>
+          <p className="helper">{subtitle}</p>
+        </div>
+
+        {suppliersToShow.length ? (
+          <div className={`supplier-grid${eventMode ? ' compact' : ''}`}>
+            {suppliersToShow.map((supplier) => {
+              const paidAmount = supplierPaidAmount(supplier)
+              const totalAmount = supplier.totalPayment
+              const remainingAmount = supplierRemainingAmount(supplier)
+
+              return (
+                <article key={supplier.id} className="supplier-card supplier-card-rich">
+                  <div className="supplier-head">
+                    <h4>{supplier.role || 'ספק ללא קטגוריה'}</h4>
+                    <span
+                      className={`status-chip ${
+                        supplier.hasSigned ? 'status-done' : eventMode ? 'status-alert' : 'status-plan'
+                      }`}
+                    >
+                      {supplier.hasSigned ? 'נסגר' : 'ממתין לסגירה'}
+                    </span>
+                  </div>
+
+                  <p className="supplier-line supplier-name-line">
+                    <strong>{supplier.name || 'שם לא הוגדר'}</strong>
+                  </p>
+                  <p className="supplier-line">טלפון: {formatPhone(supplier.phone)}</p>
+                  <p className="supplier-line">שעת הגעה: {supplier.hours || 'לא הוגדר'}</p>
+
+                  <div className={`supplier-finance-grid${eventMode ? ' event-mode-only-remaining' : ''}`}>
+                    {!eventMode ? (
+                      <div className="supplier-finance-item">
+                        <span>עלות כוללת</span>
+                        <strong>{formatMoney(totalAmount)}</strong>
+                      </div>
+                    ) : null}
+                    {!eventMode ? (
+                      <div className="supplier-finance-item">
+                        <span>מקדמה</span>
+                        <strong>{formatMoney(supplier.deposit)}</strong>
+                      </div>
+                    ) : null}
+                    {!eventMode ? (
+                      <div className="supplier-finance-item">
+                        <span>שולם בפועל</span>
+                        <strong>{formatMoney(paidAmount)}</strong>
+                      </div>
+                    ) : null}
+                    <div className="supplier-finance-item">
+                      <span>יתרה לסגירה</span>
+                      <strong>{formatMoney(remainingAmount)}</strong>
+                    </div>
+                  </div>
+
+                  <div className="supplier-signature-box">
+                    <p className="supplier-line">אישר: {supplier.paymentReceivedName || 'טרם נחתם'}</p>
+                    <p className="supplier-line">
+                      תאריך/שעה: {supplier.paymentReceivedDate || '---'} {supplier.paymentReceivedHours || ''}
+                    </p>
+                  </div>
+
+                  <div className="form-actions">
+                    <button
+                      type="button"
+                      className="btn ghost"
+                      onClick={() => openSupplierSignatureModal(supplier)}
+                    >
+                      {eventMode ? 'סגירת ספק וחתימה' : 'חתימת קבלת תשלום'}
+                    </button>
+                  </div>
+                </article>
+              )
+            })}
+          </div>
+        ) : (
+          <p className="helper">לא הוגדרו ספקים לאירוע הזה.</p>
+        )}
+      </section>
+    )
+  }
+
   return (
-    <div className="page">
+    <div className={`page${eventMode ? ' event-live-page' : ''}`}>
       <section className="detail-head">
         <div>
           <h2 className="page-title">{event.coupleName || 'אירוע ללא שם'}</h2>
           <p className="helper">
-            תצוגת שליטה מלאה על הזוג, תכנון הטקס, ספקים ותשלומים ביום האירוע.
+            {eventMode
+              ? 'מצב אירוע פעיל: מוצגים רק נתונים קריטיים לזמן אמת בסדר ביצוע קבוע.'
+              : 'תצוגת שליטה מלאה על הזוג, תכנון הטקס, ספקים ותשלומים ביום האירוע.'}
           </p>
         </div>
         <div className="form-actions">
@@ -280,7 +631,9 @@ export default function EventDetailView({
             <button className="btn primary" onClick={onEdit}>
               עריכת אירוע
             </button>
-          ) : null}
+          ) : (
+            <span className="status-chip status-alert">מצב יום אירוע</span>
+          )}
         </div>
       </section>
 
@@ -311,132 +664,200 @@ export default function EventDetailView({
         </article>
       </section>
 
-      <section className="kv-grid">
-        <div className="kv">
-          <p className="kv-label">שם חתן</p>
-          <p className="kv-value">{event.groomName || 'לא הוגדר'}</p>
-        </div>
-        <div className="kv">
-          <p className="kv-label">שם כלה</p>
-          <p className="kv-value">{event.brideName || 'לא הוגדר'}</p>
-        </div>
-        <div className="kv">
-          <p className="kv-label">מספר אורחים</p>
-          <p className="kv-value">
-            {typeof event.guests === 'number' && event.guests > 0 ? event.guests : 'לא הוגדר'}
-          </p>
-        </div>
-        <div className="kv">
-          <p className="kv-label">טלפון קשר</p>
-          <p className="kv-value">{formatPhone(event.contactPhone)}</p>
-        </div>
-        <div className="kv">
-          <p className="kv-label">מלווה חתן</p>
-          <p className="kv-value">{event.groomEscort || 'לא הוגדר'}</p>
-        </div>
-        <div className="kv">
-          <p className="kv-label">מלווה כלה</p>
-          <p className="kv-value">{event.brideEscort || 'לא הוגדר'}</p>
-        </div>
-      </section>
+      {eventMode ? (
+        <>
+          <section className="detail-section event-mode-flow-card">
+            <div className="section-head split">
+              <h3 className="section-title">סדר עבודה נעול ליום האירוע</h3>
+              <p className="helper">הסעיפים מוצגים לפי רצף תפעולי קבוע.</p>
+            </div>
+            <ol className="event-mode-stepper">
+              <li className="event-mode-step">
+                <span className="event-mode-step-index">1</span>
+                <span className="event-mode-step-title">פתיחת אירוע</span>
+              </li>
+              <li className="event-mode-step">
+                <span className="event-mode-step-index">2</span>
+                <span className="event-mode-step-title">אנשי קשר</span>
+              </li>
+              <li className="event-mode-step">
+                <span className="event-mode-step-index">3</span>
+                <span className="event-mode-step-title">טקס וחופה</span>
+              </li>
+              <li className="event-mode-step">
+                <span className="event-mode-step-index">4</span>
+                <span className="event-mode-step-title">רחבה ותפעול</span>
+              </li>
+              <li className="event-mode-step">
+                <span className="event-mode-step-index">5</span>
+                <span className="event-mode-step-title">ספקים וסגירות</span>
+              </li>
+            </ol>
+          </section>
 
-      <section className="detail-section">
-        <h3 className="section-title">ציר טקס ותוכן</h3>
-        {timelineFields.length ? (
-          <div className="timeline-list">
-            {timelineFields.map((item) => (
-              <div key={item.label} className="timeline-item">
-                <span>{item.label}</span>
-                <strong>{item.value}</strong>
+          <section className="detail-section event-mode-section">
+            <div className="section-head split">
+              <h3 className="section-title">1. פתיחת אירוע</h3>
+              <p className="helper">נתוני בסיס לתחילת עבודה באירוע.</p>
+            </div>
+            <div className="kv-grid">
+              {liveOpeningFields.map((field) => (
+                <div key={field.label} className="kv">
+                  <p className="kv-label">{field.label}</p>
+                  <p className="kv-value">{field.value}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="detail-section event-mode-section">
+            <div className="section-head split">
+              <h3 className="section-title">2. אנשי קשר</h3>
+              <p className="helper">כל אנשי הקשר הרלוונטיים ליום האירוע.</p>
+            </div>
+            {liveContacts.length ? (
+              <div className="timeline-list">
+                {liveContacts.map((item) => (
+                  <div key={item.label} className="timeline-item">
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        ) : (
-          <p className="helper">עדיין לא הוזן תוכן לציר הטקס.</p>
-        )}
-      </section>
+            ) : (
+              <p className="helper">אין אנשי קשר זמינים להצגה.</p>
+            )}
+          </section>
 
-      <section className="detail-section">
-        <h3 className="section-title">ספקים ותשלומים</h3>
-        {suppliers.length ? (
-          <div className="supplier-grid">
-            {suppliers.map((supplier) => {
-              const paidAmount = supplierPaidAmount(supplier)
-              const totalAmount = supplier.totalPayment
-              const remainingAmount = supplierRemainingAmount(supplier)
-
-              return (
-                <article key={supplier.id} className="supplier-card supplier-card-rich">
-                  <div className="supplier-head">
-                    <h4>{supplier.role || 'ספק ללא קטגוריה'}</h4>
-                    <span className={`status-chip ${supplier.hasSigned ? 'status-ready' : 'status-plan'}`}>
-                      {supplier.hasSigned ? 'אושר תשלום' : 'ממתין לאישור'}
-                    </span>
+          <section className="detail-section event-mode-section">
+            <div className="section-head split">
+              <h3 className="section-title">3. טקס וחופה</h3>
+              <p className="helper">מהלכי הטקס לפי הסדר שהוזן מראש.</p>
+            </div>
+            {liveCeremonyFlow.length ? (
+              <div className="timeline-list">
+                {liveCeremonyFlow.map((item) => (
+                  <div key={item.label} className="timeline-item">
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
                   </div>
+                ))}
+              </div>
+            ) : (
+              <p className="helper">עדיין לא הוזן תוכן לציר הטקס.</p>
+            )}
+          </section>
 
-                  <p className="supplier-line supplier-name-line">
-                    <strong>{supplier.name || 'שם לא הוגדר'}</strong>
-                  </p>
-                  <p className="supplier-line">טלפון: {formatPhone(supplier.phone)}</p>
-                  <p className="supplier-line">שעת הגעה: {supplier.hours || 'לא הוגדר'}</p>
+          <section className="detail-section event-mode-section">
+            <div className="section-head split">
+              <h3 className="section-title">4. רחבה ותפעול</h3>
+              <p className="helper">מוצגים רק סעיפים שמסומנים כפעילים או דורשים טיפול.</p>
+            </div>
+            {liveOperations.length ? (
+              <div className="timeline-list">
+                {liveOperations.map((item) => (
+                  <div key={item.label} className="timeline-item">
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="helper">אין משימות תפעול מסומנות ליום האירוע.</p>
+            )}
 
-                  <div className={`supplier-finance-grid${eventMode ? ' event-mode-only-remaining' : ''}`}>
-                    {!eventMode ? (
-                      <div className="supplier-finance-item">
-                        <span>עלות כוללת</span>
-                        <strong>{formatMoney(totalAmount)}</strong>
-                      </div>
-                    ) : null}
-                    {!eventMode ? (
-                      <div className="supplier-finance-item">
-                        <span>מקדמה</span>
-                        <strong>{formatMoney(supplier.deposit)}</strong>
-                      </div>
-                    ) : null}
-                    {!eventMode ? (
-                      <div className="supplier-finance-item">
-                        <span>שולם בפועל</span>
-                        <strong>{formatMoney(paidAmount)}</strong>
-                      </div>
-                    ) : null}
-                    <div className="supplier-finance-item">
-                      <span>יתרה ביום האירוע</span>
-                      <strong>{formatMoney(remainingAmount)}</strong>
+            {liveBrideLooks.length ? (
+              <>
+                <h4 className="section-title event-mode-subtitle">מראה כלה</h4>
+                <div className="timeline-list">
+                  {liveBrideLooks.map((item) => (
+                    <div key={item.label} className="timeline-item">
+                      <span>{item.label}</span>
+                      <strong>{item.value}</strong>
                     </div>
-                  </div>
+                  ))}
+                </div>
+              </>
+            ) : null}
+          </section>
 
-                  <div className="supplier-signature-box">
-                    <p className="supplier-line">
-                      אישר: {supplier.paymentReceivedName || 'טרם נחתם'}
-                    </p>
-                    <p className="supplier-line">
-                      תאריך/שעה: {supplier.paymentReceivedDate || '---'} {supplier.paymentReceivedHours || ''}
-                    </p>
-                  </div>
+          {renderSuppliersSection({
+            title: 'ספקים וסגירות תשלום',
+            subtitle: 'מסודר לפי שעות הגעה, עם גישה מיידית לחתימה.',
+            stepNumber: '5'
+          })}
+        </>
+      ) : (
+        <>
+          <section className="kv-grid">
+            <div className="kv">
+              <p className="kv-label">שם חתן</p>
+              <p className="kv-value">{event.groomName || 'לא הוגדר'}</p>
+            </div>
+            <div className="kv">
+              <p className="kv-label">שם כלה</p>
+              <p className="kv-value">{event.brideName || 'לא הוגדר'}</p>
+            </div>
+            <div className="kv">
+              <p className="kv-label">מספר אורחים</p>
+              <p className="kv-value">
+                {typeof event.guests === 'number' && event.guests > 0 ? event.guests : 'לא הוגדר'}
+              </p>
+            </div>
+            <div className="kv">
+              <p className="kv-label">טלפון קשר</p>
+              <p className="kv-value">{formatPhone(event.contactPhone)}</p>
+            </div>
+            <div className="kv">
+              <p className="kv-label">מלווה חתן</p>
+              <p className="kv-value">{event.groomEscort || 'לא הוגדר'}</p>
+            </div>
+            <div className="kv">
+              <p className="kv-label">מלווה כלה</p>
+              <p className="kv-value">{event.brideEscort || 'לא הוגדר'}</p>
+            </div>
+          </section>
 
-                  <div className="form-actions">
-                    <button
-                      type="button"
-                      className="btn ghost"
-                      onClick={() => openSupplierSignatureModal(supplier)}
-                    >
-                      חתימת קבלת תשלום
-                    </button>
+          <section className="detail-section">
+            <h3 className="section-title">ציר טקס ותוכן</h3>
+            {timelineFields.length ? (
+              <div className="timeline-list">
+                {timelineFields.map((item) => (
+                  <div key={item.label} className="timeline-item">
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
                   </div>
-                </article>
-              )
-            })}
-          </div>
-        ) : (
-          <p className="helper">לא הוגדרו ספקים לאירוע הזה.</p>
-        )}
-      </section>
+                ))}
+              </div>
+            ) : (
+              <p className="helper">עדיין לא הוזן תוכן לציר הטקס.</p>
+            )}
+          </section>
+
+          {renderSuppliersSection({ title: 'ספקים ותשלומים', subtitle: 'סטטוס ספקים מלא לצורכי תכנון.' })}
+        </>
+      )}
 
       {hasValue(event.notes) ? (
-        <section className="detail-section">
-          <h3 className="section-title">הערות ניהול</h3>
+        <section className={`detail-section${eventMode ? ' event-mode-section' : ''}`}>
+          <h3 className="section-title">{eventMode ? 'הערות מנהל בזמן אמת' : 'הערות ניהול'}</h3>
           <div className="note-block">{event.notes}</div>
         </section>
+      ) : null}
+
+      {eventMode ? (
+        <button
+          type="button"
+          className={`event-live-lock-button${liveScreenLocked ? ' is-locked' : ''}`}
+          onClick={handleLiveLockToggle}
+          aria-pressed={liveScreenLocked}
+          aria-label={liveScreenLocked ? 'שחרור נעילת מסך' : 'נעילת מסך'}
+          title={liveScreenLocked ? 'המנעול סגור - גלילה נעולה' : 'המנעול פתוח - גלילה פעילה'}
+        >
+          <span className="event-live-lock-icon" aria-hidden="true">
+            {liveScreenLocked ? '🔒' : '🔓'}
+          </span>
+        </button>
       ) : null}
 
       {signatureModal ? (
@@ -515,11 +936,7 @@ export default function EventDetailView({
                   />
                 </div>
                 <div className="form-actions">
-                  <button
-                    type="button"
-                    className="btn ghost"
-                    onClick={clearSignatureDrawing}
-                  >
+                  <button type="button" className="btn ghost" onClick={clearSignatureDrawing}>
                     ניקוי חתימה
                   </button>
                 </div>

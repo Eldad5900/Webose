@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   browserLocalPersistence,
   getAuth,
@@ -9,192 +9,42 @@ import {
   type User
 } from 'firebase/auth'
 import { doc, getFirestore, serverTimestamp, updateDoc } from 'firebase/firestore'
-import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
-import { firebaseConfig, getFirebaseApp, isFirebaseConfigReady } from './externalApi/firebase'
-import {
-  deleteEventById,
-  saveEventForUser,
-  subscribeToUserEvents
-} from './externalApi/events'
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import type { EventRecord, MeetingRecord, RecommendedSupplierRecord } from './controlers/types'
+import { deleteEventById, saveEventForUser, subscribeToUserEvents } from './externalApi/events'
 import { addMeetingForUser, subscribeToUserMeetings } from './externalApi/meetings'
 import {
   addRecommendedSupplierForUser,
   subscribeToUserRecommendedSuppliers
 } from './externalApi/recommendedSuppliers'
-import type { EventRecord, MeetingRecord, RecommendedSupplierRecord } from './controlers/types'
+import { firebaseConfig, getFirebaseApp, isFirebaseConfigReady } from './externalApi/firebase'
+import useRealtimeCollection from './hooks/useRealtimeCollection'
+import useHourlyAgendaAlerts from './hooks/useHourlyAgendaAlerts'
 import LoginView from './view/LoginView'
 import EventsHome from './view/EventsHome'
-import EventDetailView from './view/EventDetailView'
-import EventEditorView from './view/EventEditorView'
 import AppShell from './view/AppShell'
 import ProtectedRoute from './view/ProtectedRoute'
 import MeetingsView from './view/MeetingsView'
 import RecommendedSuppliersView from './view/RecommendedSuppliersView'
+import EventDetailRoute from './routes/EventDetailRoute'
+import EventEditRoute from './routes/EventEditRoute'
+import type { SupplierSignaturePayload } from './types/supplierSigning'
 
-function useEvents(db: ReturnType<typeof getFirestore> | null, user: User | null) {
-  const [events, setEvents] = useState<EventRecord[]>([])
-  const [eventsBusy, setEventsBusy] = useState(false)
-  const [eventsError, setEventsError] = useState('')
+type ThemeMode = 'light' | 'dark'
+const THEME_STORAGE_KEY = 'webose:theme-mode'
 
-  useEffect(() => {
-    if (!db || !user) {
-      setEvents([])
-      setEventsBusy(false)
-      setEventsError('')
-      return
-    }
-    setEventsBusy(true)
-    setEventsError('')
-    return subscribeToUserEvents(
-      db,
-      user,
-      (next) => {
-        setEvents(next)
-        setEventsBusy(false)
-      },
-      (error) => {
-        setEventsError(error.message)
-        setEventsBusy(false)
-      }
-    )
-  }, [db, user])
-
-  return { events, eventsBusy, eventsError }
-}
-
-function useMeetings(db: ReturnType<typeof getFirestore> | null, user: User | null) {
-  const [meetings, setMeetings] = useState<MeetingRecord[]>([])
-  const [meetingsBusy, setMeetingsBusy] = useState(false)
-  const [meetingsError, setMeetingsError] = useState('')
-
-  useEffect(() => {
-    if (!db || !user) {
-      setMeetings([])
-      setMeetingsBusy(false)
-      setMeetingsError('')
-      return
-    }
-    setMeetingsBusy(true)
-    setMeetingsError('')
-    return subscribeToUserMeetings(
-      db,
-      user,
-      (next) => {
-        setMeetings(next)
-        setMeetingsBusy(false)
-      },
-      (error) => {
-        setMeetingsError(error.message)
-        setMeetingsBusy(false)
-      }
-    )
-  }, [db, user])
-
-  return { meetings, meetingsBusy, meetingsError }
-}
-
-function useRecommendedSuppliers(db: ReturnType<typeof getFirestore> | null, user: User | null) {
-  const [recommendedSuppliers, setRecommendedSuppliers] = useState<RecommendedSupplierRecord[]>([])
-  const [recommendedBusy, setRecommendedBusy] = useState(false)
-  const [recommendedError, setRecommendedError] = useState('')
-
-  useEffect(() => {
-    if (!db || !user) {
-      setRecommendedSuppliers([])
-      setRecommendedBusy(false)
-      setRecommendedError('')
-      return
-    }
-    setRecommendedBusy(true)
-    setRecommendedError('')
-    return subscribeToUserRecommendedSuppliers(
-      db,
-      user,
-      (next) => {
-        setRecommendedSuppliers(next)
-        setRecommendedBusy(false)
-      },
-      (error) => {
-        setRecommendedError(error.message)
-        setRecommendedBusy(false)
-      }
-    )
-  }, [db, user])
-
-  return { recommendedSuppliers, recommendedBusy, recommendedError }
-}
-
-function EventDetailRoute({
-  events,
-  onBack,
-  onEdit,
-  onScheduleMeeting,
-  eventMode,
-  onSignSupplier
-}: {
-  events: EventRecord[]
-  onBack: () => void
-  onEdit: (eventId: string) => void
-  onScheduleMeeting: (coupleName: string) => void
-  eventMode: boolean
-  onSignSupplier: (
-    eventId: string,
-    supplierId: string,
-    payload: {
-      paymentReceivedAmount?: number
-      paymentReceivedHours?: string
-      paymentReceivedDate?: string
-      paymentReceivedName?: string
-      paymentReceivedSignature?: string
-      hasSigned?: boolean
-    }
-  ) => Promise<void>
-}) {
-  const { eventId } = useParams()
-  const event = events.find((item) => item.id === eventId)
-
-  if (!event) {
-    return <div className="empty">לא נמצא אירוע</div>
+function ensureFirestore(db: ReturnType<typeof getFirestore> | null) {
+  if (!db) {
+    throw new Error('Firestore is not initialized. Check Firebase config/env.')
   }
-
-  return (
-    <EventDetailView
-      event={event}
-      onBack={onBack}
-      onEdit={() => onEdit(event.id)}
-      onScheduleMeeting={() => onScheduleMeeting(event.coupleName || '')}
-      eventMode={eventMode}
-      onSignSupplier={onSignSupplier}
-    />
-  )
+  return db
 }
 
-function EventEditRoute({
-  events,
-  onSave,
-  onDelete,
-  mode
-}: {
-  events: EventRecord[]
-  onSave: (payload: Omit<EventRecord, 'id'>, eventId?: string) => Promise<void>
-  onDelete: (eventId: string, coupleName: string) => Promise<void> | void
-  mode: 'new' | 'edit'
-}) {
-  const { eventId } = useParams()
-  const event = events.find((item) => item.id === eventId)
-  const navigate = useNavigate()
-
-  return (
-    <EventEditorView
-      event={event}
-      onCancel={() => {
-        if (mode === 'edit' && event?.id) navigate(`/events/${event.id}`)
-        else navigate('/events')
-      }}
-      onSave={(payload) => onSave(payload, event?.id)}
-      onDelete={(id, coupleName) => onDelete(id, coupleName)}
-    />
-  )
+function ensureAuthenticatedUser(user: User | null) {
+  if (!user) {
+    throw new Error('User not authenticated.')
+  }
+  return user
 }
 
 export default function App() {
@@ -204,20 +54,92 @@ export default function App() {
   const [authError, setAuthError] = useState('')
   const [authReady, setAuthReady] = useState(false)
   const [eventMode, setEventMode] = useState(false)
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    if (typeof window === 'undefined') return 'light'
+    const stored = window.localStorage.getItem(THEME_STORAGE_KEY)
+    return stored === 'dark' ? 'dark' : 'light'
+  })
+
   const db = useMemo(() => (app ? getFirestore(app) : null), [app])
   const auth = useMemo(() => (app ? getAuth(app) : null), [app])
   const navigate = useNavigate()
   const location = useLocation()
 
-  const { events, eventsBusy, eventsError } = useEvents(db, user)
-  const { meetings, meetingsBusy, meetingsError } = useMeetings(db, user)
-  const { recommendedSuppliers, recommendedBusy, recommendedError } = useRecommendedSuppliers(db, user)
+  const subscribeEvents = useCallback(
+    (onNext: (items: EventRecord[]) => void, onError: (error: Error) => void) => {
+      if (!db || !user) return
+      return subscribeToUserEvents(db, user, onNext, onError)
+    },
+    [db, user]
+  )
+
+  const subscribeMeetings = useCallback(
+    (onNext: (items: MeetingRecord[]) => void, onError: (error: Error) => void) => {
+      if (!db || !user) return
+      return subscribeToUserMeetings(db, user, onNext, onError)
+    },
+    [db, user]
+  )
+
+  const subscribeRecommendedSuppliers = useCallback(
+    (
+      onNext: (items: RecommendedSupplierRecord[]) => void,
+      onError: (error: Error) => void
+    ) => {
+      if (!db || !user) return
+      return subscribeToUserRecommendedSuppliers(db, user, onNext, onError)
+    },
+    [db, user]
+  )
+
+  const {
+    items: events,
+    busy: eventsBusy,
+    error: eventsError
+  } = useRealtimeCollection<EventRecord>({
+    enabled: Boolean(db && user),
+    subscribe: subscribeEvents
+  })
+
+  const {
+    items: meetings,
+    busy: meetingsBusy,
+    error: meetingsError
+  } = useRealtimeCollection<MeetingRecord>({
+    enabled: Boolean(db && user),
+    subscribe: subscribeMeetings
+  })
+
+  const {
+    items: recommendedSuppliers,
+    busy: recommendedBusy,
+    error: recommendedError
+  } = useRealtimeCollection<RecommendedSupplierRecord>({
+    enabled: Boolean(db && user),
+    subscribe: subscribeRecommendedSuppliers
+  })
+
+  const {
+    alertsPhone,
+    alertsTime,
+    lastNotice: alertsNotice,
+    pendingPhoneAlertUrl,
+    notificationPermission,
+    saveAlertSettings,
+    sendPendingPhoneAlert
+  } = useHourlyAgendaAlerts({
+    enabled: Boolean(user && authReady),
+    meetings,
+    events
+  })
 
   useEffect(() => {
     if (!auth) return
+
     setPersistence(auth, browserLocalPersistence).catch(() => {
       // fallback to default in-memory if persistence fails
     })
+
     return onAuthStateChanged(auth, (nextUser) => {
       setUser(nextUser)
       setAuthBusy(false)
@@ -225,11 +147,18 @@ export default function App() {
     })
   }, [auth])
 
+  useEffect(() => {
+    if (typeof document === 'undefined' || typeof window === 'undefined') return
+    document.documentElement.setAttribute('data-theme', themeMode)
+    window.localStorage.setItem(THEME_STORAGE_KEY, themeMode)
+  }, [themeMode])
 
   const handleLogin = async (email: string, password: string) => {
     if (!auth) return
+
     setAuthBusy(true)
     setAuthError('')
+
     try {
       await signInWithEmailAndPassword(auth, email, password)
       navigate('/events', { replace: true })
@@ -246,94 +175,52 @@ export default function App() {
   }
 
   const handleSaveEvent = async (payload: Omit<EventRecord, 'id'>, eventId?: string) => {
-    if (!db) {
-      throw new Error('Firestore is not initialized. Check Firebase config/env.')
-    }
-    if (!user) {
-      throw new Error('User not authenticated.')
-    }
-    try {
-      await saveEventForUser(db, user, payload, eventId)
-    } catch (error) {
-      throw error
-    }
+    const safeDb = ensureFirestore(db)
+    const safeUser = ensureAuthenticatedUser(user)
+    await saveEventForUser(safeDb, safeUser, payload, eventId)
   }
 
-  const handleDeleteEvent = async (eventId: string, coupleName: string) => {
-    if (!db) {
-      throw new Error('Firestore is not initialized. Check Firebase config/env.')
-    }
-    if (!user) {
-      throw new Error('User not authenticated.')
-    }
-    try {
-      await deleteEventById(db, eventId)
-      window.alert('האירוע נמחק בהצלחה')
-    } catch (error) {
-      throw error
-    }
+  const handleDeleteEvent = async (eventId: string, _coupleName: string) => {
+    const safeDb = ensureFirestore(db)
+    ensureAuthenticatedUser(user)
+    await deleteEventById(safeDb, eventId)
+    window.alert('האירוע נמחק בהצלחה')
   }
 
   const handleAddMeeting = async (payload: Omit<MeetingRecord, 'id'>) => {
-    if (!db) {
-      throw new Error('Firestore is not initialized. Check Firebase config/env.')
-    }
-    if (!user) {
-      throw new Error('User not authenticated.')
-    }
-    try {
-      await addMeetingForUser(db, user, payload)
-    } catch (error) {
-      throw error
-    }
+    const safeDb = ensureFirestore(db)
+    const safeUser = ensureAuthenticatedUser(user)
+    await addMeetingForUser(safeDb, safeUser, payload)
   }
 
   const handleSignSupplier = async (
     eventId: string,
     supplierId: string,
-    payload: {
-      paymentReceivedAmount?: number
-      paymentReceivedHours?: string
-      paymentReceivedDate?: string
-      paymentReceivedName?: string
-      paymentReceivedSignature?: string
-      hasSigned?: boolean
-    }
+    payload: SupplierSignaturePayload
   ) => {
-    if (!db) {
-      throw new Error('Firestore is not initialized. Check Firebase config/env.')
+    const safeDb = ensureFirestore(db)
+
+    const targetEvent = events.find((item) => item.id === eventId)
+    if (!targetEvent || !targetEvent.suppliers) {
+      throw new Error('Event or suppliers not found.')
     }
-    try {
-      const targetEvent = events.find((item) => item.id === eventId)
-      if (!targetEvent || !targetEvent.suppliers) {
-        throw new Error('Event or suppliers not found.')
-      }
-      const updatedSuppliers = targetEvent.suppliers.map((supplier) =>
-        supplier.id === supplierId ? { ...supplier, ...payload } : supplier
-      )
-      await updateDoc(doc(db, 'events', eventId), {
-        suppliers: updatedSuppliers,
-        updatedAt: serverTimestamp()
-      })
-    } catch (error) {
-      throw error
-    }
+
+    const updatedSuppliers = targetEvent.suppliers.map((supplier) =>
+      supplier.id === supplierId ? { ...supplier, ...payload } : supplier
+    )
+
+    await updateDoc(doc(safeDb, 'events', eventId), {
+      suppliers: updatedSuppliers,
+      updatedAt: serverTimestamp()
+    })
   }
 
   const handleAddRecommendedSupplier = async (
     payload: Omit<RecommendedSupplierRecord, 'id' | 'ownerId'>
   ) => {
-    if (!db) {
-      throw new Error('Firestore is not initialized. Check Firebase config/env.')
-    }
-    if (!user) {
-      throw new Error('User not authenticated.')
-    }
-    try {
-      await addRecommendedSupplierForUser(db, user, payload)
-    } catch (error) {
-      throw error
-    }
+    const safeDb = ensureFirestore(db)
+    const safeUser = ensureAuthenticatedUser(user)
+    await addRecommendedSupplierForUser(safeDb, safeUser, payload)
   }
 
   if (!isFirebaseConfigReady(firebaseConfig)) {
@@ -348,12 +235,24 @@ export default function App() {
           <div className="hint">
             <p>משתנים נדרשים:</p>
             <ul>
-              <li><code>VITE_FIREBASE_API_KEY</code></li>
-              <li><code>VITE_FIREBASE_AUTH_DOMAIN</code></li>
-              <li><code>VITE_FIREBASE_PROJECT_ID</code></li>
-              <li><code>VITE_FIREBASE_STORAGE_BUCKET</code></li>
-              <li><code>VITE_FIREBASE_MESSAGING_SENDER_ID</code></li>
-              <li><code>VITE_FIREBASE_APP_ID</code></li>
+              <li>
+                <code>VITE_FIREBASE_API_KEY</code>
+              </li>
+              <li>
+                <code>VITE_FIREBASE_AUTH_DOMAIN</code>
+              </li>
+              <li>
+                <code>VITE_FIREBASE_PROJECT_ID</code>
+              </li>
+              <li>
+                <code>VITE_FIREBASE_STORAGE_BUCKET</code>
+              </li>
+              <li>
+                <code>VITE_FIREBASE_MESSAGING_SENDER_ID</code>
+              </li>
+              <li>
+                <code>VITE_FIREBASE_APP_ID</code>
+              </li>
             </ul>
           </div>
         </div>
@@ -383,6 +282,17 @@ export default function App() {
               }}
               eventMode={eventMode}
               onToggleEventMode={() => setEventMode((prev) => !prev)}
+              alertsPhone={alertsPhone}
+              alertsTime={alertsTime}
+              alertsNotice={alertsNotice}
+              hasPendingPhoneAlert={Boolean(pendingPhoneAlertUrl)}
+              notificationsPermission={notificationPermission}
+              onSaveAlertSettings={saveAlertSettings}
+              onSendPendingPhoneAlert={sendPendingPhoneAlert}
+              themeMode={themeMode}
+              onToggleTheme={() =>
+                setThemeMode((prev) => (prev === 'light' ? 'dark' : 'light'))
+              }
             />
           }
         >
@@ -398,6 +308,7 @@ export default function App() {
               />
             }
           />
+
           <Route
             path="/events/:eventId"
             element={
@@ -405,14 +316,21 @@ export default function App() {
                 events={events}
                 onBack={() => navigate('/events')}
                 onEdit={(eventId) => navigate(`/events/${eventId}/edit`)}
-                onScheduleMeeting={(coupleName) =>
-                  navigate('/meetings', { state: { presetCoupleName: coupleName } })
+                onScheduleMeeting={({ eventId, coupleName, contactPhone }) =>
+                  navigate('/meetings', {
+                    state: {
+                      presetEventId: eventId,
+                      presetCoupleName: coupleName,
+                      presetContactPhone: contactPhone ?? null
+                    }
+                  })
                 }
                 eventMode={eventMode}
                 onSignSupplier={handleSignSupplier}
               />
             }
           />
+
           <Route
             path="/events/new"
             element={
@@ -424,28 +342,7 @@ export default function App() {
               />
             }
           />
-          <Route
-            path="/meetings"
-            element={
-              <MeetingsView
-                meetings={meetings}
-                busy={meetingsBusy}
-                error={meetingsError}
-                onAdd={handleAddMeeting}
-              />
-            }
-          />
-          <Route
-            path="/recommended"
-            element={
-              <RecommendedSuppliersView
-                suppliers={recommendedSuppliers}
-                busy={recommendedBusy}
-                error={recommendedError}
-                onAdd={handleAddRecommendedSupplier}
-              />
-            }
-          />
+
           <Route
             path="/events/:eventId/edit"
             element={
@@ -454,6 +351,31 @@ export default function App() {
                 onSave={handleSaveEvent}
                 onDelete={handleDeleteEvent}
                 mode="edit"
+              />
+            }
+          />
+
+          <Route
+            path="/meetings"
+            element={
+              <MeetingsView
+                meetings={meetings}
+                events={events}
+                busy={meetingsBusy}
+                error={meetingsError}
+                onAdd={handleAddMeeting}
+              />
+            }
+          />
+
+          <Route
+            path="/recommended"
+            element={
+              <RecommendedSuppliersView
+                suppliers={recommendedSuppliers}
+                busy={recommendedBusy}
+                error={recommendedError}
+                onAdd={handleAddRecommendedSupplier}
               />
             }
           />
