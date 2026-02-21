@@ -16,6 +16,19 @@ type LabeledValue = {
   value: string
 }
 
+type EventStageOverviewItem = {
+  id: string
+  title: string
+  subtitle: string
+  count: number
+}
+
+type BrideLookTableRow = {
+  lookLabel: string
+  makeup: string
+  hair: string
+}
+
 type WakeLockSentinelLike = {
   release: () => Promise<void>
   addEventListener?: (type: 'release', listener: () => void) => void
@@ -101,6 +114,16 @@ function toTimeSortValue(value?: string) {
   return hour * 60 + minute
 }
 
+function isParentsContactLabel(label: string) {
+  return label === 'אב החתן' || label === 'אם החתן' || label === 'אב הכלה' || label === 'אם הכלה'
+}
+
+function hasMeaningfulValue(value?: string | null) {
+  if (!hasValue(value)) return false
+  const normalized = value!.trim()
+  return normalized !== 'לא הוגדר' && normalized !== 'לא נקבע'
+}
+
 export default function EventDetailView({
   event,
   onBack,
@@ -122,6 +145,8 @@ export default function EventDetailView({
 }) {
   const [signatureModal, setSignatureModal] = useState<SupplierSignatureModalState | null>(null)
   const [signatureSaving, setSignatureSaving] = useState(false)
+  const [exitConfirmOpen, setExitConfirmOpen] = useState(false)
+  const [highlightedStageId, setHighlightedStageId] = useState('')
   const [liveScreenLocked, setLiveScreenLocked] = useState(false)
   const [wakeLockActive, setWakeLockActive] = useState(false)
   const [wakeLockError, setWakeLockError] = useState('')
@@ -156,62 +181,85 @@ export default function EventDetailView({
   ].filter((item) => hasValue(item.value))
 
   const liveOpeningFields = [
-    { label: 'תאריך האירוע', value: formatDate(event.date) },
     { label: 'מיקום האירוע', value: event.hall || 'לא הוגדר' },
+    { label: 'מיקום התארגנות חתן', value: event.groomPrepLocation || 'לא הוגדר' },
+    { label: 'מיקום התארגנות כלה', value: event.bridePrepLocation || 'לא הוגדר' },
     { label: 'שעת הגעה לאולם', value: event.arrivalTimeToHall || 'לא הוגדר' },
-    { label: 'סטטוס', value: event.status || 'בתהליך' },
     {
       label: 'כמות אורחים',
       value: typeof event.guests === 'number' && event.guests > 0 ? String(event.guests) : 'לא הוגדר'
     }
   ]
 
-  const liveContacts = useMemo(() => {
-    const contacts: LabeledValue[] = []
+  const liveContactsByPhase = useMemo(() => {
+    const preparation: LabeledValue[] = []
+    const ceremony: LabeledValue[] = []
+    const reception: LabeledValue[] = []
+    const operations: LabeledValue[] = []
 
-    if (event.contactPhone && event.contactPhone > 0) {
-      contacts.push({ label: 'טלפון קשר ראשי', value: formatPhone(event.contactPhone) })
-    }
-
-    const pushContact = (label: string, name?: string, phone?: number) => {
+    const pushContact = (target: LabeledValue[], label: string, name?: string, phone?: number) => {
       const parts: string[] = []
       if (hasValue(name)) parts.push(name!.trim())
       if (phone && phone > 0) parts.push(formatPhone(phone))
       if (!parts.length) return
-      contacts.push({ label, value: parts.join(' · ') })
+      target.push({ label, value: parts.join(' · ') })
     }
 
-    pushContact('חתן', event.groomName)
-    pushContact('כלה', event.brideName)
-    pushContact('מלווה חתן', event.groomEscort, event.groomEscortPhone)
-    pushContact('מלווה כלה', event.brideEscort, event.brideEscortPhone)
-    pushContact('אב החתן', event.groomFatherName, event.groomFatherPhone)
-    pushContact('אם החתן', event.groomMotherName, event.groomMotherPhone)
-    pushContact('אב הכלה', event.brideFatherName, event.brideFatherPhone)
-    pushContact('אם הכלה', event.brideMotherName, event.brideMotherPhone)
+    const pushValue = (target: LabeledValue[], label: string, value?: string) => {
+      if (!hasValue(value)) return
+      target.push({ label, value: value!.trim() })
+    }
 
-    return contacts
+    if (event.contactPhone && event.contactPhone > 0) {
+      preparation.push({ label: 'טלפון קשר ראשי', value: formatPhone(event.contactPhone) })
+    }
+    pushContact(preparation, 'מלווה חתן', event.groomEscort, event.groomEscortPhone)
+    pushContact(preparation, 'מלווה כלה', event.brideEscort, event.brideEscortPhone)
+
+    pushContact(ceremony, 'אב החתן', event.groomFatherName, event.groomFatherPhone)
+    pushContact(ceremony, 'אם החתן', event.groomMotherName, event.groomMotherPhone)
+    pushContact(ceremony, 'אב הכלה', event.brideFatherName, event.brideFatherPhone)
+    pushContact(ceremony, 'אם הכלה', event.brideMotherName, event.brideMotherPhone)
+    pushValue(ceremony, 'חתן בליווי', event.groomWithEscort)
+    pushValue(ceremony, 'כלה בליווי', event.brideWithEscort)
+    pushValue(ceremony, 'עדים', event.witnesses)
+    pushValue(ceremony, 'יין לחופה', event.wineAtChuppah)
+    suppliers.forEach((supplier) => {
+      const role = supplier.role?.trim() ?? ''
+      if (!role.includes('רב')) return
+      pushContact(ceremony, role || 'רב', supplier.name, supplier.phone)
+    })
+
+    pushValue(reception, 'מנהל אירוע', event.eventManager)
+    pushValue(reception, 'חתימה מורשית', event.authorizedSigner)
+    pushValue(reception, 'אלכוהול', event.alcoholSource)
+    return {
+      preparationContacts: preparation,
+      ceremonyContacts: ceremony,
+      receptionContacts: reception,
+      operationsContacts: operations
+    }
   }, [event])
 
   const liveCeremonyFlow = useMemo(() => {
     const items: LabeledValue[] = [
-      { label: 'חתן - מיקום התארגנות', value: event.groomPrepLocation || '' },
-      { label: 'כלה - מיקום התארגנות', value: event.bridePrepLocation || '' },
-      { label: 'הגעה לאולם', value: event.arrivalTimeToHall || '' },
+      {
+        label: 'מי מלווה את החתן לחופה',
+        value: event.groomEscort || event.groomWithEscort || ''
+      },
+      {
+        label: 'מי מלווה את הכלה לחופה',
+        value: event.brideEscort || event.brideWithEscort || ''
+      },
       { label: 'מי ממתין בחופה', value: event.waitingAtChuppah || '' },
+      { label: 'כניסת אחים/אחיות', value: checklistDisplay(event.siblingsEntry) },
+      { label: 'שיר כניסת אחים/אחיות', value: event.siblingsEntrySong || '' },
       { label: 'שיר כניסת חתן', value: event.groomEntrySong || '' },
       { label: 'שיר כניסת כלה', value: event.brideEntrySong || '' },
       { label: 'שיר שבירת כוס', value: event.glassBreakSong || '' },
-      { label: 'לאחר טבעות', value: event.afterRings || '' },
-      { label: 'נשארים לברך / לשלוף את הזוג', value: event.ushersOrPullCouple || '' },
-      { label: 'עדים', value: event.witnesses || '' },
-      { label: 'סלואו', value: checklistDisplay(event.slowDance, event.slowDanceNote) }
+      { label: 'שם אחרי טבעות', value: event.afterRings || '' },
+      { label: 'נשארים לברך / לשלוף את הזוג', value: event.ushersOrPullCouple || '' }
     ]
-
-    const siblingsValue = checklistDisplay(event.siblingsEntry, event.siblingsEntrySong)
-    if (siblingsValue) {
-      items.push({ label: 'כניסת אחים/אחיות', value: siblingsValue })
-    }
 
     const blessingValue = checklistDisplay(event.bridesBlessing, event.bridesBlessingNote)
     if (blessingValue) {
@@ -224,10 +272,6 @@ export default function EventDetailView({
   const liveOperations = useMemo(() => {
     const checklist: LabeledValue[] = [
       {
-        label: 'אלכוהול',
-        value: event.alcoholSource || ''
-      },
-      {
         label: 'הפרדה ברקודים',
         value: event.danceSeparationBarcodes || ''
       },
@@ -238,29 +282,141 @@ export default function EventDetailView({
         label: 'סלי התארגנות',
         value: checklistDisplay(event.organizationBaskets, event.organizationBasketsNote)
       },
-      { label: 'מיץ ענבים', value: checklistDisplay(event.grapeJuice, event.grapeJuiceNote) },
+      { label: 'מיץ גת', value: checklistDisplay(event.grapeJuice, event.grapeJuiceNote) },
       { label: 'משקפי שמש', value: checklistDisplay(event.sunglasses, event.sunglassesNote) },
       {
         label: 'גומיות וכלי חירום',
         value: checklistDisplay(event.gummiesAndTools, event.gummiesAndToolsNote)
-      }
+      },
+      { label: 'סלואו', value: checklistDisplay(event.slowDance, event.slowDanceNote) }
     ]
 
     return checklist.filter((item) => hasValue(item.value))
   }, [event])
 
-  const liveBrideLooks = useMemo(() => {
-    const looks: LabeledValue[] = [
-      { label: 'לוק 1 - איפור', value: checklistDisplay(event.brideLook1Makeup) },
-      { label: 'לוק 1 - שיער', value: checklistDisplay(event.brideLook1Hair) },
-      { label: 'לוק 2 - איפור', value: checklistDisplay(event.brideLook2Makeup) },
-      { label: 'לוק 2 - שיער', value: checklistDisplay(event.brideLook2Hair) },
-      { label: 'לוק 3 - איפור', value: checklistDisplay(event.brideLook3Makeup) },
-      { label: 'לוק 3 - שיער', value: checklistDisplay(event.brideLook3Hair) }
+  const seatingDetails = useMemo(() => {
+    const details: LabeledValue[] = []
+    if (hasValue(event.seatingCompany)) {
+      details.push({ label: 'הושבת משפחות', value: event.seatingCompany!.trim() })
+    }
+    if (event.seatingManagerPhone && event.seatingManagerPhone > 0) {
+      details.push({ label: 'טלפון מנהל הושבה', value: formatPhone(event.seatingManagerPhone) })
+    }
+    return details
+  }, [event])
+
+  const hasSeatingSketch = hasValue(event.seatingAllocationFileData)
+  const seatingSketchIsImage = event.seatingAllocationFileData?.startsWith('data:image') ?? false
+
+  const liveBrideLooksTable = useMemo<BrideLookTableRow[]>(() => {
+    const rows: BrideLookTableRow[] = [
+      {
+        lookLabel: 'לוק 1',
+        makeup: checklistDisplay(event.brideLook1Makeup),
+        hair: checklistDisplay(event.brideLook1Hair)
+      },
+      {
+        lookLabel: 'לוק 2',
+        makeup: checklistDisplay(event.brideLook2Makeup),
+        hair: checklistDisplay(event.brideLook2Hair)
+      },
+      {
+        lookLabel: 'לוק 3',
+        makeup: checklistDisplay(event.brideLook3Makeup),
+        hair: checklistDisplay(event.brideLook3Hair)
+      }
     ]
 
-    return looks.filter((item) => hasValue(item.value))
+    return rows.filter((row) => hasValue(row.makeup) || hasValue(row.hair))
   }, [event])
+
+  const eventStageOverview = useMemo<EventStageOverviewItem[]>(() => {
+    const prepCount =
+      [
+        event.hall,
+        event.groomPrepLocation,
+        event.bridePrepLocation,
+        event.arrivalTimeToHall
+      ].filter((value) => hasMeaningfulValue(value)).length +
+      (typeof event.guests === 'number' && event.guests > 0 ? 1 : 0) +
+      liveContactsByPhase.preparationContacts.length
+
+    return [
+      {
+        id: 'event-stage-preparation',
+        title: '1. התארגנות',
+        subtitle: 'פתיחה ואנשי קשר',
+        count: prepCount
+      },
+      {
+        id: 'event-stage-reception',
+        title: '2. קבלת פנים',
+        subtitle: 'ניהול קבלת אורחים',
+        count: liveContactsByPhase.receptionContacts.length
+      },
+      {
+        id: 'event-stage-ceremony',
+        title: '3. טקס וחופה',
+        subtitle: 'מהלך חופה וקידושין',
+        count: liveCeremonyFlow.length + liveContactsByPhase.ceremonyContacts.length
+      },
+      {
+        id: 'event-stage-seating',
+        title: '4. הושבה',
+        subtitle: 'טבלה וסקיצה',
+        count: seatingDetails.length + (hasSeatingSketch ? 1 : 0)
+      },
+      {
+        id: 'event-stage-operations',
+        title: '5. רחבה ותפעול',
+        subtitle: 'תפעול בזמן אמת',
+        count: liveOperations.length + liveContactsByPhase.operationsContacts.length
+      },
+      {
+        id: 'event-stage-bride-looks',
+        title: '6. מראה כלה',
+        subtitle: 'לוקים, שיער ואיפור',
+        count: liveBrideLooksTable.reduce((count, row) => {
+          const makeupCount = hasValue(row.makeup) ? 1 : 0
+          const hairCount = hasValue(row.hair) ? 1 : 0
+          return count + makeupCount + hairCount
+        }, 0)
+      },
+      {
+        id: 'event-stage-suppliers',
+        title: '7. ספקים וסגירות',
+        subtitle: 'סגירת תשלומים',
+        count: suppliers.length
+      }
+    ]
+  }, [
+    event,
+    hasSeatingSketch,
+    liveBrideLooksTable,
+    liveCeremonyFlow.length,
+    liveContactsByPhase,
+    liveOperations.length,
+    seatingDetails.length,
+    suppliers.length
+  ])
+
+  const jumpToStage = (stageId: string) => {
+    const section = document.getElementById(stageId)
+    if (!section) return
+    section.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setHighlightedStageId('')
+    if (typeof window !== 'undefined') {
+      window.requestAnimationFrame(() => setHighlightedStageId(stageId))
+    } else {
+      setHighlightedStageId(stageId)
+    }
+  }
+
+  useEffect(() => {
+    if (!highlightedStageId) return
+    const timeoutId = window.setTimeout(() => setHighlightedStageId(''), 1800)
+    return () => window.clearTimeout(timeoutId)
+  }, [highlightedStageId])
 
   const selectedSupplier = useMemo(() => {
     if (!signatureModal) return null
@@ -519,19 +675,39 @@ export default function EventDetailView({
     }
   }
 
+  const handleBackClick = () => {
+    if (eventMode) {
+      setExitConfirmOpen(true)
+      return
+    }
+    onBack()
+  }
+
+  const handleConfirmExit = () => {
+    setExitConfirmOpen(false)
+    onBack()
+  }
+
   const renderSuppliersSection = ({
     title,
     subtitle,
-    stepNumber
+    stepNumber,
+    sectionId
   }: {
     title: string
     subtitle: string
     stepNumber?: string
+    sectionId?: string
   }) => {
     const suppliersToShow = eventMode ? sortedSuppliers : suppliers
 
     return (
-      <section className={`detail-section${eventMode ? ' event-mode-section' : ''}`}>
+      <section
+        id={sectionId}
+        className={`detail-section${eventMode ? ' event-mode-section' : ''}${
+          sectionId && sectionId === highlightedStageId ? ' stage-target-highlight' : ''
+        }`}
+      >
         <div className="section-head split">
           <h3 className="section-title">
             {stepNumber ? `${stepNumber}. ${title}` : title}
@@ -544,7 +720,10 @@ export default function EventDetailView({
             {suppliersToShow.map((supplier) => {
               const paidAmount = supplierPaidAmount(supplier)
               const totalAmount = supplier.totalPayment
-              const remainingAmount = supplierRemainingAmount(supplier)
+              const remainingAmount =
+                eventMode && typeof supplier.balance === 'number'
+                  ? Math.max(supplier.balance, 0)
+                  : supplierRemainingAmount(supplier)
 
               return (
                 <article key={supplier.id} className="supplier-card supplier-card-rich">
@@ -625,11 +804,11 @@ export default function EventDetailView({
           <p className="helper">
             {eventMode
               ? 'מצב אירוע פעיל: מוצגים רק נתונים קריטיים לזמן אמת בסדר ביצוע קבוע.'
-              : 'תצוגת שליטה מלאה על הזוג, תכנון הטקס, ספקים ותשלומים ביום האירוע.'}
+              : 'מצב לא אירוע: תצוגת שליטה מלאה על הזוג, תכנון הטקס, ספקים ותשלומים.'}
           </p>
         </div>
         <div className="form-actions">
-          <button className="btn ghost" onClick={onBack}>
+          <button className="btn ghost" onClick={handleBackClick}>
             חזרה ללוח האירועים
           </button>
           {!eventMode ? (
@@ -653,62 +832,65 @@ export default function EventDetailView({
           <p className="stat-value">{formatDate(event.date)}</p>
           <p className="stat-foot">{event.hall || 'אולם לא הוגדר'}</p>
         </article>
-        <article className="stat-card">
-          <p className="stat-label">סטטוס</p>
-          <p className="stat-value">{event.status || 'בתהליך'}</p>
-          <p className="stat-foot">
-            {eventMode ? 'מצב אירוע פעיל: עריכה נעולה' : 'מצב תכנון: ניתן לערוך'}
-          </p>
-        </article>
-        <article className="stat-card">
-          <p className="stat-label">תקציב ספקים</p>
-          <p className="stat-value">{formatMoney(totalSuppliersAmount)}</p>
-          <p className="stat-foot">שולם: {formatMoney(paidSuppliersAmount)}</p>
-        </article>
-        <article className="stat-card">
-          <p className="stat-label">סגירת ספקים</p>
-          <p className="stat-value">
-            {signedSuppliersCount}/{suppliers.length}
-          </p>
-          <p className="stat-foot">יתרה ביום האירוע: {formatMoney(remainingSuppliersAmount)}</p>
-        </article>
+        {!eventMode ? (
+          <>
+            <article className="stat-card">
+              <p className="stat-label">סטטוס</p>
+              <p className="stat-value">{event.status || 'בתהליך'}</p>
+              <p className="stat-foot">מצב לא אירוע: ניתן לערוך</p>
+            </article>
+            <article className="stat-card">
+              <p className="stat-label">תקציב ספקים</p>
+              <p className="stat-value">{formatMoney(totalSuppliersAmount)}</p>
+              <p className="stat-foot">שולם: {formatMoney(paidSuppliersAmount)}</p>
+            </article>
+            <article className="stat-card">
+              <p className="stat-label">סגירת ספקים</p>
+              <p className="stat-value">
+                {signedSuppliersCount}/{suppliers.length}
+              </p>
+              <p className="stat-foot">יתרה ביום האירוע: {formatMoney(remainingSuppliersAmount)}</p>
+            </article>
+          </>
+        ) : null}
       </section>
 
       {eventMode ? (
         <>
-          <section className="detail-section event-mode-flow-card">
+          <section className="detail-section event-mode-overview">
             <div className="section-head split">
-              <h3 className="section-title">סדר עבודה נעול ליום האירוע</h3>
-              <p className="helper">הסעיפים מוצגים לפי רצף תפעולי קבוע.</p>
+              <h3 className="section-title">לוח שלבי החתונה</h3>
+              <p className="helper">לחיצה על שלב תעביר אותך ישירות אליו.</p>
             </div>
-            <ol className="event-mode-stepper">
-              <li className="event-mode-step">
-                <span className="event-mode-step-index">1</span>
-                <span className="event-mode-step-title">פתיחת אירוע</span>
-              </li>
-              <li className="event-mode-step">
-                <span className="event-mode-step-index">2</span>
-                <span className="event-mode-step-title">אנשי קשר</span>
-              </li>
-              <li className="event-mode-step">
-                <span className="event-mode-step-index">3</span>
-                <span className="event-mode-step-title">טקס וחופה</span>
-              </li>
-              <li className="event-mode-step">
-                <span className="event-mode-step-index">4</span>
-                <span className="event-mode-step-title">רחבה ותפעול</span>
-              </li>
-              <li className="event-mode-step">
-                <span className="event-mode-step-index">5</span>
-                <span className="event-mode-step-title">ספקים וסגירות</span>
-              </li>
-            </ol>
+            <div className="event-mode-overview-grid">
+              {eventStageOverview.map((stage) => (
+                <button
+                  key={stage.id}
+                  type="button"
+                  className="event-mode-overview-item"
+                  onClick={() => jumpToStage(stage.id)}
+                >
+                  <span className="event-mode-overview-title">{stage.title}</span>
+                  <span className="event-mode-overview-subtitle">{stage.subtitle}</span>
+                  <span
+                    className={`status-chip ${stage.count > 0 ? 'status-done' : 'status-plan'} event-mode-overview-status`}
+                  >
+                    {stage.count > 0 ? `${stage.count} פריטים` : 'חסר מידע'}
+                  </span>
+                </button>
+              ))}
+            </div>
           </section>
 
-          <section className="detail-section event-mode-section">
+          <section
+            id="event-stage-preparation"
+            className={`detail-section event-mode-section${
+              highlightedStageId === 'event-stage-preparation' ? ' stage-target-highlight' : ''
+            }`}
+          >
             <div className="section-head split">
-              <h3 className="section-title">1. פתיחת אירוע</h3>
-              <p className="helper">נתוני בסיס לתחילת עבודה באירוע.</p>
+              <h3 className="section-title">1. התארגנות</h3>
+              <p className="helper">נתוני בסיס לשלב ההתארגנות.</p>
             </div>
             <div className="kv-grid">
               {liveOpeningFields.map((field) => (
@@ -718,32 +900,92 @@ export default function EventDetailView({
                 </div>
               ))}
             </div>
+
+            {liveContactsByPhase.preparationContacts.length ? (
+              <>
+                <h4 className="section-title event-mode-subtitle">אנשי קשר להתארגנות</h4>
+                <div className="timeline-list">
+                  {liveContactsByPhase.preparationContacts.map((item) => (
+                    <div key={`prep-${item.label}`} className="timeline-item">
+                      <span>{item.label}</span>
+                      <strong>{item.value}</strong>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : null}
           </section>
 
-          <section className="detail-section event-mode-section">
+          <section
+            id="event-stage-reception"
+            className={`detail-section event-mode-section${
+              highlightedStageId === 'event-stage-reception' ? ' stage-target-highlight' : ''
+            }`}
+          >
             <div className="section-head split">
-              <h3 className="section-title">2. אנשי קשר</h3>
-              <p className="helper">כל אנשי הקשר הרלוונטיים ליום האירוע.</p>
+              <h3 className="section-title">2. קבלת פנים</h3>
+              <p className="helper">פרטי אנשי קשר ותפעול בשלב קבלת הפנים.</p>
             </div>
-            {liveContacts.length ? (
+            {liveContactsByPhase.receptionContacts.length ? (
               <div className="timeline-list">
-                {liveContacts.map((item) => (
-                  <div key={item.label} className="timeline-item">
+                {liveContactsByPhase.receptionContacts.map((item) => (
+                  <div key={`reception-${item.label}`} className="timeline-item">
                     <span>{item.label}</span>
                     <strong>{item.value}</strong>
                   </div>
                 ))}
               </div>
             ) : (
-              <p className="helper">אין אנשי קשר זמינים להצגה.</p>
+              <p className="helper">אין נתונים שהוגדרו לקבלת פנים.</p>
             )}
           </section>
 
-          <section className="detail-section event-mode-section">
+          <section
+            id="event-stage-ceremony"
+            className={`detail-section event-mode-section${
+              highlightedStageId === 'event-stage-ceremony' ? ' stage-target-highlight' : ''
+            }`}
+          >
             <div className="section-head split">
               <h3 className="section-title">3. טקס וחופה</h3>
-              <p className="helper">מהלכי הטקס לפי הסדר שהוזן מראש.</p>
+              <p className="helper">מהלכי הטקס ואנשי קשר רלוונטיים לשלב החופה.</p>
             </div>
+            {liveContactsByPhase.ceremonyContacts.length ? (
+              <>
+                <h4 className="section-title event-mode-subtitle">אנשי קשר לחופה וקידושין</h4>
+                {liveContactsByPhase.ceremonyContacts.filter((item) => isParentsContactLabel(item.label))
+                  .length ? (
+                  <>
+                    <div className="timeline-list">
+                  {liveContactsByPhase.ceremonyContacts
+                        .filter((item) => isParentsContactLabel(item.label))
+                        .map((item, index) => (
+                          <div key={`ceremony-parents-${item.label}-${index}`} className="timeline-item">
+                            <span>{item.label}</span>
+                            <strong>{item.value}</strong>
+                          </div>
+                        ))}
+                    </div>
+                  </>
+                ) : null}
+                {liveContactsByPhase.ceremonyContacts.filter((item) => !isParentsContactLabel(item.label))
+                  .length ? (
+                  <>
+                    <h4 className="section-title event-mode-subtitle">חופה וקידושין</h4>
+                    <div className="timeline-list">
+                      {liveContactsByPhase.ceremonyContacts
+                        .filter((item) => !isParentsContactLabel(item.label))
+                        .map((item, index) => (
+                          <div key={`ceremony-other-${item.label}-${index}`} className="timeline-item">
+                            <span>{item.label}</span>
+                            <strong>{item.value}</strong>
+                          </div>
+                        ))}
+                    </div>
+                  </>
+                ) : null}
+              </>
+            ) : null}
             {liveCeremonyFlow.length ? (
               <div className="timeline-list">
                 {liveCeremonyFlow.map((item) => (
@@ -758,11 +1000,76 @@ export default function EventDetailView({
             )}
           </section>
 
-          <section className="detail-section event-mode-section">
+          <section
+            id="event-stage-seating"
+            className={`detail-section event-mode-section${
+              highlightedStageId === 'event-stage-seating' ? ' stage-target-highlight' : ''
+            }`}
+          >
             <div className="section-head split">
-              <h3 className="section-title">4. רחבה ותפעול</h3>
-              <p className="helper">מוצגים רק סעיפים שמסומנים כפעילים או דורשים טיפול.</p>
+              <h3 className="section-title">4. הושבה</h3>
+              <p className="helper">טבלת הושבה, מנהל הושבה וסקיצת הושבה.</p>
             </div>
+            {seatingDetails.length ? (
+              <div className="timeline-list">
+                {seatingDetails.map((item) => (
+                  <div key={`seating-${item.label}`} className="timeline-item">
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="helper">אין פרטי הושבה שהוגדרו.</p>
+            )}
+            {hasSeatingSketch ? (
+              <div className="seating-sketch-wrap">
+                <h4 className="section-title event-mode-subtitle">סקיצת הושבה</h4>
+                {seatingSketchIsImage ? (
+                  <img
+                    className="seating-sketch-image"
+                    src={event.seatingAllocationFileData}
+                    alt={event.seatingAllocationFileName || 'סקיצת הושבה'}
+                  />
+                ) : (
+                  <a
+                    className="btn ghost seating-sketch-link"
+                    href={event.seatingAllocationFileData}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    פתיחת סקיצת הושבה
+                  </a>
+                )}
+              </div>
+            ) : (
+              <p className="helper">לא הועלתה סקיצת הושבה.</p>
+            )}
+          </section>
+
+          <section
+            id="event-stage-operations"
+            className={`detail-section event-mode-section${
+              highlightedStageId === 'event-stage-operations' ? ' stage-target-highlight' : ''
+            }`}
+          >
+            <div className="section-head split">
+              <h3 className="section-title">5. רחבה ותפעול</h3>
+              <p className="helper">משימות תפעול ואנשי קשר לביצוע בזמן אמת.</p>
+            </div>
+            {liveContactsByPhase.operationsContacts.length ? (
+              <>
+                <h4 className="section-title event-mode-subtitle">אנשי קשר לתפעול</h4>
+                <div className="timeline-list">
+                  {liveContactsByPhase.operationsContacts.map((item) => (
+                    <div key={`operations-${item.label}`} className="timeline-item">
+                      <span>{item.label}</span>
+                      <strong>{item.value}</strong>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : null}
             {liveOperations.length ? (
               <div className="timeline-list">
                 {liveOperations.map((item) => (
@@ -775,13 +1082,70 @@ export default function EventDetailView({
             ) : (
               <p className="helper">אין משימות תפעול מסומנות ליום האירוע.</p>
             )}
+          </section>
 
-            {liveBrideLooks.length ? (
+          <section
+            id="event-stage-bride-looks"
+            className={`detail-section event-mode-section${
+              highlightedStageId === 'event-stage-bride-looks' ? ' stage-target-highlight' : ''
+            }`}
+          >
+            <div className="section-head split">
+              <h3 className="section-title">6. מראה כלה</h3>
+              <p className="helper">פירוט לוקים ושיער/איפור ליום האירוע.</p>
+            </div>
+            {liveBrideLooksTable.length ? (
+              <div className="bride-looks-table-wrap">
+                <table className="bride-looks-table">
+                  <thead>
+                    <tr>
+                      <th>לוק</th>
+                      <th>איפור</th>
+                      <th>שיער</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {liveBrideLooksTable.map((row) => (
+                      <tr key={row.lookLabel}>
+                        <td>{row.lookLabel}</td>
+                        <td>{row.makeup || 'לא הוגדר'}</td>
+                        <td>{row.hair || 'לא הוגדר'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+          </section>
+
+          {renderSuppliersSection({
+            title: 'ספקים וסגירות תשלום',
+            subtitle: 'מסודר לפי שעות הגעה, עם גישה מיידית לחתימה.',
+            stepNumber: '7',
+            sectionId: 'event-stage-suppliers'
+          })}
+        </>
+      ) : (
+        <>
+          <section className="detail-section">
+            <div className="section-head split">
+              <h3 className="section-title">1. התארגנות</h3>
+              <p className="helper">כל נתוני הפתיחה וההתארגנות.</p>
+            </div>
+            <div className="kv-grid">
+              {liveOpeningFields.map((field) => (
+                <div key={field.label} className="kv">
+                  <p className="kv-label">{field.label}</p>
+                  <p className="kv-value">{field.value}</p>
+                </div>
+              ))}
+            </div>
+            {liveContactsByPhase.preparationContacts.length ? (
               <>
-                <h4 className="section-title event-mode-subtitle">מראה כלה</h4>
+                <h4 className="section-title event-mode-subtitle">אנשי קשר להתארגנות</h4>
                 <div className="timeline-list">
-                  {liveBrideLooks.map((item) => (
-                    <div key={item.label} className="timeline-item">
+                  {liveContactsByPhase.preparationContacts.map((item) => (
+                    <div key={`plan-prep-${item.label}`} className="timeline-item">
                       <span>{item.label}</span>
                       <strong>{item.value}</strong>
                     </div>
@@ -791,49 +1155,47 @@ export default function EventDetailView({
             ) : null}
           </section>
 
-          {renderSuppliersSection({
-            title: 'ספקים וסגירות תשלום',
-            subtitle: 'מסודר לפי שעות הגעה, עם גישה מיידית לחתימה.',
-            stepNumber: '5'
-          })}
-        </>
-      ) : (
-        <>
-          <section className="kv-grid">
-            <div className="kv">
-              <p className="kv-label">שם חתן</p>
-              <p className="kv-value">{event.groomName || 'לא הוגדר'}</p>
+          <section className="detail-section">
+            <div className="section-head split">
+              <h3 className="section-title">2. קבלת פנים</h3>
+              <p className="helper">נתוני קבלת פנים מלאים.</p>
             </div>
-            <div className="kv">
-              <p className="kv-label">שם כלה</p>
-              <p className="kv-value">{event.brideName || 'לא הוגדר'}</p>
-            </div>
-            <div className="kv">
-              <p className="kv-label">מספר אורחים</p>
-              <p className="kv-value">
-                {typeof event.guests === 'number' && event.guests > 0 ? event.guests : 'לא הוגדר'}
-              </p>
-            </div>
-            <div className="kv">
-              <p className="kv-label">טלפון קשר</p>
-              <p className="kv-value">{formatPhone(event.contactPhone)}</p>
-            </div>
-            <div className="kv">
-              <p className="kv-label">מלווה חתן</p>
-              <p className="kv-value">{event.groomEscort || 'לא הוגדר'}</p>
-            </div>
-            <div className="kv">
-              <p className="kv-label">מלווה כלה</p>
-              <p className="kv-value">{event.brideEscort || 'לא הוגדר'}</p>
-            </div>
+            {liveContactsByPhase.receptionContacts.length ? (
+              <div className="timeline-list">
+                {liveContactsByPhase.receptionContacts.map((item) => (
+                  <div key={`plan-reception-${item.label}`} className="timeline-item">
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="helper">אין נתונים שהוגדרו לקבלת פנים.</p>
+            )}
           </section>
 
           <section className="detail-section">
-            <h3 className="section-title">ציר טקס ותוכן</h3>
-            {timelineFields.length ? (
+            <div className="section-head split">
+              <h3 className="section-title">3. טקס וחופה</h3>
+              <p className="helper">כל פרטי הטקס, חופה וקידושין.</p>
+            </div>
+            {liveContactsByPhase.ceremonyContacts.length ? (
+              <>
+                <h4 className="section-title event-mode-subtitle">אנשי קשר לחופה וקידושין</h4>
+                <div className="timeline-list">
+                  {liveContactsByPhase.ceremonyContacts.map((item, index) => (
+                    <div key={`plan-ceremony-${item.label}-${index}`} className="timeline-item">
+                      <span>{item.label}</span>
+                      <strong>{item.value}</strong>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : null}
+            {liveCeremonyFlow.length ? (
               <div className="timeline-list">
-                {timelineFields.map((item) => (
-                  <div key={item.label} className="timeline-item">
+                {liveCeremonyFlow.map((item) => (
+                  <div key={`plan-ceremony-flow-${item.label}`} className="timeline-item">
                     <span>{item.label}</span>
                     <strong>{item.value}</strong>
                   </div>
@@ -844,7 +1206,116 @@ export default function EventDetailView({
             )}
           </section>
 
-          {renderSuppliersSection({ title: 'ספקים ותשלומים', subtitle: 'סטטוס ספקים מלא לצורכי תכנון.' })}
+          <section className="detail-section">
+            <div className="section-head split">
+              <h3 className="section-title">4. הושבה</h3>
+              <p className="helper">פרטי הושבה וסקיצה.</p>
+            </div>
+            {seatingDetails.length ? (
+              <div className="timeline-list">
+                {seatingDetails.map((item) => (
+                  <div key={`plan-seating-${item.label}`} className="timeline-item">
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="helper">אין פרטי הושבה שהוגדרו.</p>
+            )}
+            {hasSeatingSketch ? (
+              <div className="seating-sketch-wrap">
+                <h4 className="section-title event-mode-subtitle">סקיצת הושבה</h4>
+                {seatingSketchIsImage ? (
+                  <img
+                    className="seating-sketch-image"
+                    src={event.seatingAllocationFileData}
+                    alt={event.seatingAllocationFileName || 'סקיצת הושבה'}
+                  />
+                ) : (
+                  <a
+                    className="btn ghost seating-sketch-link"
+                    href={event.seatingAllocationFileData}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    פתיחת סקיצת הושבה
+                  </a>
+                )}
+              </div>
+            ) : (
+              <p className="helper">לא הועלתה סקיצת הושבה.</p>
+            )}
+          </section>
+
+          <section className="detail-section">
+            <div className="section-head split">
+              <h3 className="section-title">5. רחבה ותפעול</h3>
+              <p className="helper">משימות תפעול מלאות.</p>
+            </div>
+            {liveContactsByPhase.operationsContacts.length ? (
+              <>
+                <h4 className="section-title event-mode-subtitle">אנשי קשר לתפעול</h4>
+                <div className="timeline-list">
+                  {liveContactsByPhase.operationsContacts.map((item) => (
+                    <div key={`plan-operations-${item.label}`} className="timeline-item">
+                      <span>{item.label}</span>
+                      <strong>{item.value}</strong>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : null}
+            {liveOperations.length ? (
+              <div className="timeline-list">
+                {liveOperations.map((item) => (
+                  <div key={`plan-operations-flow-${item.label}`} className="timeline-item">
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="helper">אין משימות תפעול מסומנות.</p>
+            )}
+          </section>
+
+          <section className="detail-section">
+            <div className="section-head split">
+              <h3 className="section-title">6. מראה כלה</h3>
+              <p className="helper">לוקים, איפור ושיער.</p>
+            </div>
+            {liveBrideLooksTable.length ? (
+              <div className="bride-looks-table-wrap">
+                <table className="bride-looks-table">
+                  <thead>
+                    <tr>
+                      <th>לוק</th>
+                      <th>איפור</th>
+                      <th>שיער</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {liveBrideLooksTable.map((row) => (
+                      <tr key={`plan-${row.lookLabel}`}>
+                        <td>{row.lookLabel}</td>
+                        <td>{row.makeup || 'לא הוגדר'}</td>
+                        <td>{row.hair || 'לא הוגדר'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="helper">לא הוגדר מידע למראה כלה.</p>
+            )}
+          </section>
+
+          {renderSuppliersSection({
+            title: 'ספקים ותשלומים',
+            subtitle: 'סטטוס ספקים מלא לצורכי תכנון.',
+            stepNumber: '7'
+          })}
         </>
       )}
 
@@ -961,6 +1432,23 @@ export default function EventDetailView({
                 </button>
               </div>
             </form>
+          </div>
+        </section>
+      ) : null}
+
+      {exitConfirmOpen ? (
+        <section className="signature-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="signature-modal-card">
+            <h3 className="section-title">יציאה ממצב אירוע</h3>
+            <p className="helper">האם אתה בטוח שאתה רוצה לצאת מהאירוע?</p>
+            <div className="form-actions">
+              <button type="button" className="btn ghost" onClick={() => setExitConfirmOpen(false)}>
+                ביטול
+              </button>
+              <button type="button" className="btn danger" onClick={handleConfirmExit}>
+                כן, יציאה
+              </button>
+            </div>
           </div>
         </section>
       ) : null}

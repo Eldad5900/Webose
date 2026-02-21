@@ -7,7 +7,7 @@ import {
   type EditableEventField,
   type QuestionnaireField
 } from '../controlers/eventQuestionnaire'
-import type { EventRecord, SupplierRecord } from '../controlers/types'
+import type { EventRecord, RecommendedSupplierRecord, SupplierRecord } from '../controlers/types'
 
 type SupplierFormState = {
   id: string
@@ -240,11 +240,13 @@ function shouldKeepAutoSyncName(currentValue: string, previousAutoValue?: string
 
 export default function EventEditorView({
   event,
+  recommendedSuppliers,
   onSave,
   onCancel,
   onDelete
 }: {
   event?: EventRecord
+  recommendedSuppliers: RecommendedSupplierRecord[]
   onSave: (payload: Omit<EventRecord, 'id'>) => Promise<void>
   onCancel: () => void
   onDelete: (eventId: string, coupleName: string) => Promise<void> | void
@@ -265,6 +267,7 @@ export default function EventEditorView({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [currentStep, setCurrentStep] = useState(0)
+  const [selectedRecommendedSupplierId, setSelectedRecommendedSupplierId] = useState('')
   const [draftReady, setDraftReady] = useState(false)
   const draftKey = useMemo(
     () => `webose:event-draft:${eventId ?? event?.id ?? 'new'}`,
@@ -406,6 +409,29 @@ export default function EventEditorView({
 
   const addSupplier = () => {
     setSuppliers((prev) => [...prev, defaultSupplier()])
+  }
+
+  const addRecommendedSupplier = () => {
+    if (!selectedRecommendedSupplierId) return
+    const selectedRecommendedSupplier = recommendedSuppliers.find(
+      (supplier) => supplier.id === selectedRecommendedSupplierId
+    )
+    if (!selectedRecommendedSupplier) return
+
+    setSuppliers((prev) => [
+      ...prev,
+      {
+        id: makeId(),
+        role: selectedRecommendedSupplier.category?.trim() || '',
+        name: selectedRecommendedSupplier.name?.trim() || '',
+        phone: sanitizePhoneInput(selectedRecommendedSupplier.phone ?? ''),
+        hours: '',
+        totalPayment: '',
+        deposit: '',
+        balance: ''
+      }
+    ])
+    setSelectedRecommendedSupplierId('')
   }
 
   const removeSupplier = (supplierId: string) => {
@@ -863,9 +889,35 @@ export default function EventEditorView({
         <section className="detail-section">
           <div className="section-head split">
             <h3 className="section-title">ספקים ותשלומים</h3>
-            <button type="button" className="btn ghost" onClick={addSupplier}>
-              הוסף ספק
-            </button>
+            <div className="form-actions supplier-actions-row">
+              <button type="button" className="btn ghost" onClick={addSupplier}>
+                הוסף ספק
+              </button>
+              {recommendedSuppliers.length ? (
+                <>
+                  <select
+                    className="input supplier-recommended-select"
+                    value={selectedRecommendedSupplierId}
+                    onChange={(eventInput) => setSelectedRecommendedSupplierId(eventInput.target.value)}
+                  >
+                    <option value="">בחר ספק מומלץ</option>
+                    {recommendedSuppliers.map((supplier) => (
+                      <option key={supplier.id} value={supplier.id}>
+                        {supplier.name} {supplier.category ? `· ${supplier.category}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="btn ghost"
+                    onClick={addRecommendedSupplier}
+                    disabled={!selectedRecommendedSupplierId}
+                  >
+                    הוסף ספק מומלץ
+                  </button>
+                </>
+              ) : null}
+            </div>
           </div>
           <div className="editor-stack">
             {suppliers.map((supplier, index) => (

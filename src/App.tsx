@@ -8,7 +8,7 @@ import {
   signOut,
   type User
 } from 'firebase/auth'
-import { doc, getFirestore, serverTimestamp, updateDoc } from 'firebase/firestore'
+import { doc, getDoc, getFirestore, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import type { EventRecord, MeetingRecord, RecommendedSupplierRecord } from './controlers/types'
 import { deleteEventById, saveEventForUser, subscribeToUserEvents } from './externalApi/events'
@@ -32,6 +32,14 @@ import type { SupplierSignaturePayload } from './types/supplierSigning'
 
 type ThemeMode = 'light' | 'dark'
 const THEME_STORAGE_KEY = 'webose:theme-mode'
+
+function isEventModeRestrictedPath(pathname: string) {
+  if (pathname === '/events/new') return true
+  if (pathname.startsWith('/events/') && pathname.endsWith('/edit')) return true
+  if (pathname.startsWith('/meetings')) return true
+  if (pathname.startsWith('/recommended')) return true
+  return false
+}
 
 function ensureFirestore(db: ReturnType<typeof getFirestore> | null) {
   if (!db) {
@@ -130,7 +138,31 @@ export default function App() {
   } = useHourlyAgendaAlerts({
     enabled: Boolean(user && authReady),
     meetings,
-    events
+    events,
+    loadPersistedAlertSettings: async () => {
+      if (!db || !user) return null
+      const settingsRef = doc(db, 'users', user.uid)
+      const settingsSnap = await getDoc(settingsRef)
+      if (!settingsSnap.exists()) return null
+      const data = settingsSnap.data() as { alertsPhone?: unknown; alertsTime?: unknown }
+      return {
+        phone: typeof data.alertsPhone === 'string' ? data.alertsPhone : '',
+        time: typeof data.alertsTime === 'string' ? data.alertsTime : ''
+      }
+    },
+    savePersistedAlertSettings: async ({ phone, time }) => {
+      if (!db || !user) return
+      const settingsRef = doc(db, 'users', user.uid)
+      await setDoc(
+        settingsRef,
+        {
+          alertsPhone: phone ?? '',
+          alertsTime: time ?? '08:00',
+          updatedAt: serverTimestamp()
+        },
+        { merge: true }
+      )
+    }
   })
 
   useEffect(() => {
@@ -152,6 +184,12 @@ export default function App() {
     document.documentElement.setAttribute('data-theme', themeMode)
     window.localStorage.setItem(THEME_STORAGE_KEY, themeMode)
   }, [themeMode])
+
+  useEffect(() => {
+    if (!eventMode) return
+    if (!isEventModeRestrictedPath(location.pathname)) return
+    navigate('/events', { replace: true })
+  }, [eventMode, location.pathname, navigate])
 
   const handleLogin = async (email: string, password: string) => {
     if (!auth) return
@@ -334,49 +372,67 @@ export default function App() {
           <Route
             path="/events/new"
             element={
+              eventMode ? (
+                <Navigate to="/events" replace />
+              ) : (
               <EventEditRoute
                 events={events}
+                recommendedSuppliers={recommendedSuppliers}
                 onSave={handleSaveEvent}
                 onDelete={handleDeleteEvent}
                 mode="new"
               />
+              )
             }
           />
 
           <Route
             path="/events/:eventId/edit"
             element={
-              <EventEditRoute
-                events={events}
-                onSave={handleSaveEvent}
-                onDelete={handleDeleteEvent}
-                mode="edit"
-              />
+              eventMode ? (
+                <Navigate to="/events" replace />
+              ) : (
+                <EventEditRoute
+                  events={events}
+                  recommendedSuppliers={recommendedSuppliers}
+                  onSave={handleSaveEvent}
+                  onDelete={handleDeleteEvent}
+                  mode="edit"
+                />
+              )
             }
           />
 
           <Route
             path="/meetings"
             element={
-              <MeetingsView
-                meetings={meetings}
-                events={events}
-                busy={meetingsBusy}
-                error={meetingsError}
-                onAdd={handleAddMeeting}
-              />
+              eventMode ? (
+                <Navigate to="/events" replace />
+              ) : (
+                <MeetingsView
+                  meetings={meetings}
+                  events={events}
+                  busy={meetingsBusy}
+                  error={meetingsError}
+                  onAdd={handleAddMeeting}
+                />
+              )
             }
           />
 
           <Route
             path="/recommended"
             element={
-              <RecommendedSuppliersView
-                suppliers={recommendedSuppliers}
-                busy={recommendedBusy}
-                error={recommendedError}
-                onAdd={handleAddRecommendedSupplier}
-              />
+              eventMode ? (
+                <Navigate to="/events" replace />
+              ) : (
+                <RecommendedSuppliersView
+                  suppliers={recommendedSuppliers}
+                  busy={recommendedBusy}
+                  error={recommendedError}
+                  onAdd={handleAddRecommendedSupplier}
+                />
+              )
             }
           />
         </Route>

@@ -33,7 +33,7 @@ export default function AppShell({
   alertsNotice: string
   hasPendingPhoneAlert: boolean
   notificationsPermission: 'granted' | 'denied' | 'default' | 'unsupported'
-  onSaveAlertSettings: (phoneInput: string, alertTimeInput: string) => void
+  onSaveAlertSettings: (phoneInput: string, alertTimeInput: string) => Promise<void>
   onSendPendingPhoneAlert: () => void
   themeMode: 'light' | 'dark'
   onToggleTheme: () => void
@@ -59,7 +59,7 @@ export default function AppShell({
 
   const handlePhoneSave = (eventInput: React.FormEvent) => {
     eventInput.preventDefault()
-    onSaveAlertSettings(phoneDraft, timeDraft)
+    void onSaveAlertSettings(phoneDraft, timeDraft)
     setIsPhoneModalOpen(false)
   }
 
@@ -74,7 +74,7 @@ export default function AppShell({
         </div>
 
         <div className="header-mode">
-          <p className="mode-title">מצב אירוע</p>
+          <p className="mode-title">מצב עבודה</p>
           <label className="toggle" aria-label="החלפת מצב אירוע">
             <input
               type="checkbox"
@@ -86,7 +86,8 @@ export default function AppShell({
               <span className="toggle-thumb" />
             </span>
           </label>
-          <p className="mode-state">{eventMode ? 'פעיל' : 'כבוי'}</p>
+          <p className="mode-state">{eventMode ? 'מצב אירוע' : 'מצב לא אירוע'}</p>
+          <p className="mode-hint">{eventMode ? 'תפעול בזמן אמת' : 'תכנון ועריכה מלאה'}</p>
         </div>
 
         <div className="brand-block">

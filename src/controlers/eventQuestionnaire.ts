@@ -188,10 +188,10 @@ export const eventQuestionnaireSections: QuestionnaireSection[] = [
         kind: 'text',
         showWhen: { key: 'organizationBaskets', value: 'כן אבל' }
       },
-      { key: 'grapeJuice', label: 'מיץ ענבים', kind: 'select', options: yesNoMaybeOptions },
+      { key: 'grapeJuice', label: 'מיץ גת', kind: 'select', options: yesNoMaybeOptions },
       {
         key: 'grapeJuiceNote',
-        label: 'הערת מיץ ענבים',
+        label: 'הערת מיץ גת',
         kind: 'text',
         showWhen: { key: 'grapeJuice', value: 'כן אבל' }
       },

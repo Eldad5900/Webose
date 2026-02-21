@@ -53,6 +53,8 @@ function normalizeEvent(
     guests: typeof data.guests === 'number' ? data.guests : undefined,
     status: data.status ?? '',
     contactPhone: typeof data.contactPhone === 'number' ? data.contactPhone : 0,
+    groomWithEscort: data.groomWithEscort ?? '',
+    brideWithEscort: data.brideWithEscort ?? '',
     groomEscort: data.groomEscort ?? '',
     brideEscort: data.brideEscort ?? '',
     groomEntrySong: data.groomEntrySong ?? '',

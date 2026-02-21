@@ -9,6 +9,11 @@ type AgendaSummary = {
   eventsCount: number
 }
 
+type AlertSettingsPayload = {
+  phone?: string | null
+  time?: string | null
+}
+
 const ALERTS_PHONE_STORAGE_KEY = 'webose:alerts:phone'
 const ALERTS_TIME_STORAGE_KEY = 'webose:alerts:time'
 const ALERTS_PERMISSION_PROMPTED_STORAGE_KEY = 'webose:alerts:permission-prompted'
@@ -106,11 +111,15 @@ function buildAgendaSummary({
 export default function useHourlyAgendaAlerts({
   enabled,
   meetings,
-  events
+  events,
+  loadPersistedAlertSettings,
+  savePersistedAlertSettings
 }: {
   enabled: boolean
   meetings: MeetingRecord[]
   events: EventRecord[]
+  loadPersistedAlertSettings?: () => Promise<AlertSettingsPayload | null>
+  savePersistedAlertSettings?: (payload: Required<AlertSettingsPayload>) => Promise<void>
 }) {
   const [alertsPhone, setAlertsPhone] = useState('')
   const [alertsTime, setAlertsTime] = useState(DEFAULT_ALERT_TIME)
@@ -132,6 +141,40 @@ export default function useHourlyAgendaAlerts({
     setAlertsTime(normalizeAlertTime(storedTime))
   }, [])
 
+  useEffect(() => {
+    if (!loadPersistedAlertSettings || typeof window === 'undefined') return
+    let cancelled = false
+
+    const loadSettings = async () => {
+      try {
+        const persisted = await loadPersistedAlertSettings()
+        if (!persisted || cancelled) return
+
+        const normalizedPhone = normalizePhoneInput(persisted.phone ?? '')
+        const normalizedTime = normalizeAlertTime(persisted.time)
+
+        setAlertsPhone(normalizedPhone)
+        setAlertsTime(normalizedTime)
+
+        if (normalizedPhone) {
+          window.localStorage.setItem(ALERTS_PHONE_STORAGE_KEY, normalizedPhone)
+        } else {
+          window.localStorage.removeItem(ALERTS_PHONE_STORAGE_KEY)
+        }
+        window.localStorage.setItem(ALERTS_TIME_STORAGE_KEY, normalizedTime)
+      } catch (error) {
+        if (cancelled) return
+        const message = error instanceof Error ? error.message : 'טעינת הגדרות התראה נכשלה'
+        setLastNotice(message)
+      }
+    }
+
+    void loadSettings()
+    return () => {
+      cancelled = true
+    }
+  }, [loadPersistedAlertSettings])
+
   const requestNotificationsPermission = useCallback(async () => {
     if (!canUseNotifications) {
       setLastNotice('הדפדפן לא תומך בהתראות מערכת.')
@@ -149,7 +192,7 @@ export default function useHourlyAgendaAlerts({
     setLastNotice('הרשאת התראות עדיין לא אושרה.')
   }, [canUseNotifications])
 
-  const saveAlertSettings = useCallback((phoneInput: string, alertTimeInput: string) => {
+  const saveAlertSettings = useCallback(async (phoneInput: string, alertTimeInput: string) => {
     if (typeof window === 'undefined') return
     const normalized = normalizePhoneInput(phoneInput)
     const normalizedTime = normalizeAlertTime(alertTimeInput)
@@ -159,13 +202,25 @@ export default function useHourlyAgendaAlerts({
     if (!normalized) {
       setAlertsPhone('')
       window.localStorage.removeItem(ALERTS_PHONE_STORAGE_KEY)
-      setLastNotice(`שעת ההתראה נשמרה ל-${normalizedTime}. טלפון ההתראות הוסר.`)
+      try {
+        await savePersistedAlertSettings?.({ phone: '', time: normalizedTime })
+        setLastNotice(`שעת ההתראה נשמרה ל-${normalizedTime}. טלפון ההתראות הוסר.`)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'שמירת הגדרות התראה נכשלה'
+        setLastNotice(message)
+      }
       return
     }
     setAlertsPhone(normalized)
     window.localStorage.setItem(ALERTS_PHONE_STORAGE_KEY, normalized)
-    setLastNotice(`הגדרות נשמרו: טלפון ${normalized}, שעת התראה ${normalizedTime}.`)
-  }, [])
+    try {
+      await savePersistedAlertSettings?.({ phone: normalized, time: normalizedTime })
+      setLastNotice(`הגדרות נשמרו: טלפון ${normalized}, שעת התראה ${normalizedTime}.`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'שמירת הגדרות התראה נכשלה'
+      setLastNotice(message)
+    }
+  }, [savePersistedAlertSettings])
 
   useEffect(() => {
     if (!enabled || typeof window === 'undefined' || !canUseNotifications) return
